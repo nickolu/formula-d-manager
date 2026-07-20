@@ -1,0 +1,46 @@
+rules_version = '2';
+
+// PHASE 1 RULES — deliberately loose, but not world-writable.
+//
+// Everyone at the table is anonymous, so there is no per-user authorization
+// yet; the only bar is "signed in at all", which anonymous auth clears
+// automatically. That is enough to stop a stranger who learns the project ID
+// from writing to your season, and it costs nothing at the table.
+//
+// Phase 2 replaces this with real accounts: players read, admins write
+// campaign/series settings, and the event log becomes append-only.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    match /players/{playerId} {
+      allow read, write: if signedIn();
+    }
+
+    match /seasons/{seasonId} {
+      allow read, write: if signedIn();
+    }
+
+    match /races/{raceId} {
+      allow read, write: if signedIn();
+
+      match /state/{docId} {
+        allow read, write: if signedIn();
+      }
+
+      // Corrections append rather than mutate, so nothing here should ever be
+      // updated or deleted — enforce that now, while the log is still small.
+      match /events/{eventId} {
+        allow read, create: if signedIn();
+        allow update, delete: if false;
+      }
+
+      match /participants/{playerId} {
+        allow read, write: if signedIn();
+      }
+    }
+  }
+}

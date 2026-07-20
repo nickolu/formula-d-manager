@@ -1,0 +1,161 @@
+import type { Timestamp } from "firebase/firestore";
+
+export type PlayerId = string;
+
+export interface Player {
+  id: PlayerId;
+  name: string;
+  displayName: string;
+  active: boolean;
+}
+
+/**
+ * Season scoring lives in Firestore rather than in code because house scoring
+ * rules churn between seasons and shouldn't require a deploy to argue about.
+ */
+export interface ScoringConfig {
+  /** Points by finishing position; index 0 is first place. */
+  positionPoints: number[];
+  /** Awarded to anyone finishing past the end of positionPoints. */
+  pointsBeyondTable: number;
+  dnfPoints: number;
+}
+
+export interface Season {
+  id: string;
+  name: string;
+  scoringConfig: ScoringConfig;
+  startDate: Timestamp;
+}
+
+export type RaceStatus = "scheduled" | "live" | "complete";
+
+export interface Race {
+  id: string;
+  seasonId: string;
+  track: string;
+  scheduledAt: Timestamp;
+  status: RaceStatus;
+  /** Laps required to finish. Each lap spans many rounds. */
+  lapCount: number;
+}
+
+export interface Participant {
+  playerId: PlayerId;
+  startPosition: number;
+  /** Laps this car has completed. Cars cross the line at different rounds. */
+  lapsCompleted: number;
+  finalPosition: number | null;
+  dnf: boolean;
+}
+
+/**
+ * The single hot document every screen subscribes to. Everything here is
+ * derivable by replaying the event log, so a corrupted live doc is recoverable.
+ *
+ * The timer is state, not a process: clients derive remaining time from
+ * turnStartedAt + turnDurationMs. A null turnStartedAt means paused, with
+ * turnDurationMs holding whatever time was left at the moment of the pause.
+ *
+ * Turn order is NOT a fixed player rotation. Formula D plays in track-position
+ * order, leader first, re-derived each round — hence two separate lists:
+ *
+ *   positionOrder  live standings, nudged whenever an overtake happens
+ *   roundOrder     snapshot taken when the round began, frozen until it ends
+ *
+ * Keeping them separate is what makes a mid-round overtake affect the NEXT
+ * round rather than reshuffling a round already in progress.
+ */
+export interface LiveState {
+  currentPlayerId: PlayerId | null;
+  turnStartedAt: Timestamp | null;
+  turnDurationMs: number;
+  /** One round = every car has moved once. Many rounds make a lap. */
+  currentRound: number;
+  positionOrder: PlayerId[];
+  roundOrder: PlayerId[];
+  updatedAt: Timestamp;
+}
+
+export type EventSource = "manual" | "chat" | "system";
+
+interface BaseEvent {
+  id: string;
+  at: Timestamp;
+  /** Chat-sourced entries are the ones most likely to be wrong; keep them labelled. */
+  source: EventSource;
+  actor: string | null;
+}
+
+/** Seeds the log so the opening live state is reconstructable by replay. */
+export interface RaceCreatedEvent extends BaseEvent {
+  type: "raceCreated";
+  track: string;
+  lapCount: number;
+  order: PlayerId[];
+  turnDurationMs: number;
+}
+
+export interface TurnAdvancedEvent extends BaseEvent {
+  type: "turnAdvanced";
+  fromPlayerId: PlayerId | null;
+  toPlayerId: PlayerId;
+  round: number;
+}
+
+/** Emitted when the order wraps and a fresh snapshot of standings is taken. */
+export interface RoundStartedEvent extends BaseEvent {
+  type: "roundStarted";
+  round: number;
+  order: PlayerId[];
+}
+
+/** An overtake: standings changed, taking effect from the next round. */
+export interface PositionOrderChangedEvent extends BaseEvent {
+  type: "positionOrderChanged";
+  order: PlayerId[];
+}
+
+export interface LapCompletedEvent extends BaseEvent {
+  type: "lapCompleted";
+  playerId: PlayerId;
+  /** Which lap this car just finished. */
+  lap: number;
+  round: number;
+}
+
+export interface TurnPausedEvent extends BaseEvent {
+  type: "turnPaused";
+  remainingMs: number;
+}
+
+export interface TurnResumedEvent extends BaseEvent {
+  type: "turnResumed";
+}
+
+export interface RaceFinishedEvent extends BaseEvent {
+  type: "raceFinished";
+  order: PlayerId[];
+  dnf: PlayerId[];
+}
+
+/**
+ * Corrections append rather than mutate, so the audit trail survives and a bad
+ * transcription is one undo instead of a corrupted race.
+ */
+export interface CorrectionEvent extends BaseEvent {
+  type: "correction";
+  targetEventId: string;
+  note: string;
+}
+
+export type RaceEvent =
+  | RaceCreatedEvent
+  | TurnAdvancedEvent
+  | RoundStartedEvent
+  | PositionOrderChangedEvent
+  | LapCompletedEvent
+  | TurnPausedEvent
+  | TurnResumedEvent
+  | RaceFinishedEvent
+  | CorrectionEvent;
