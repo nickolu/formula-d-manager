@@ -1,36 +1,103 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Formula D
 
-## Getting Started
+A tool for running our Formula D board game nights and season: a shared turn
+timer, a log of what happened during the race, and — later — a season website.
 
-First, run the development server:
+Next.js 16 on Vercel, Firestore for data, Firebase Auth for identity.
+
+## Getting started
 
 ```bash
+npm install
+cp .env.local.example .env.local   # fill in from the Firebase console
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The Firebase project is `formula-d-aaf82`. It needs **Firestore** and
+**Anonymous sign-in** enabled (Authentication → Sign-in method). Without
+anonymous auth the app shows "Sign-in failed", because the security rules reject
+unauthenticated reads.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+To get the config values without the console:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+firebase apps:sdkconfig WEB
+```
 
-## Learn More
+## Using it on game night
 
-To learn more about Next.js, take a look at the following resources:
+| Screen | Who looks at it | URL |
+|---|---|---|
+| **Table** | shared tablet, passed nobody, tapped by whoever just moved | `/race/<id>/table` |
+| **Screen** | the TV — big timer and standings | `/race/<id>/screen` |
+| **Entry** | corrections and finishing the race | `/race/<id>/entry` |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Create a race from `/`, enter players in starting grid order, then open the table
+and screen views on separate devices.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+During play:
 
-## Deploy on Vercel
+- **Next turn** advances to the next car in the round.
+- **↑ ↓** nudge the standings when someone overtakes. This is what the *next*
+  round's order is built from — a mid-race overtake never reshuffles the round
+  already in progress.
+- **+lap** marks a car as having crossed the line. Laps are per car, so cars
+  complete them on different rounds.
+- Round counter is global; one round means every car has moved once.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The timer is a pace-keeper with no teeth. It turns amber under 30 seconds and red
+at zero, and nothing happens mechanically — it's social pressure only.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Scripts
+
+```bash
+npm run dev     # dev server
+npm run build   # production build
+npm run smoke   # 24 end-to-end checks against the real Firestore project
+npm run lint
+```
+
+`npm run smoke` is the real test suite: it drives actual transactions and a live
+listener against Firestore, which is the only way to verify the parts that
+matter. It creates a `SMOKE-TEST` race and cleans up afterwards. Run it after
+changing anything in `lib/`.
+
+Deploy security rules with:
+
+```bash
+firebase deploy --only firestore:rules
+```
+
+## How it's put together
+
+```
+lib/race.ts     every state mutation — live doc + event log, one transaction
+lib/timer.ts    pure countdown arithmetic
+lib/hooks.ts    Firestore subscriptions
+lib/types.ts    the data model, with the reasoning in comments
+lib/setup.ts    race creation
+app/race/...    the three views
+```
+
+Two ideas carry most of the design:
+
+**The event log is the product.** The live document is a denormalized cache that
+screens subscribe to; the append-only event log is the record of truth.
+Corrections append rather than mutate, so there's an audit trail and a bad entry
+is one undo. The Firestore rules enforce append-only at the server.
+
+**The timer is state, not a process.** Nothing counts down anywhere. The live doc
+stores a start timestamp and a duration, and each client derives the remaining
+time locally. No drift, no polling, no server involvement between taps — a
+reconnecting screen is instantly correct, and one small write per turn is the
+only network traffic.
+
+`AGENTS.md` has the full design notes and the invariants worth not breaking.
+
+## Status
+
+Phase 1 (game night) is done and verified. Still to come: the season website and
+standings, a chatbot for logging races in natural language, and a rules chatbot
+that knows our house rulings.
+
+That last one is waiting on `docs/house-rules.md` — see the note in that file.
