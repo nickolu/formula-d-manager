@@ -80,6 +80,40 @@ not polling. One listener per screen, one document read per change. A weekly
 Firestore persistent local cache is enabled in `lib/firebase.ts`, so the
 countdown survives a wifi drop and the next-turn write queues until reconnect.
 
+## Scoring and standings
+
+**Standings are derived, never stored.** `computeStandings` in `lib/scoring.ts`
+is a pure function of finished races plus a `ScoringConfig` — no Firestore, no
+clock, no I/O. That is what lets you re-argue house rules against past seasons
+without touching the database, and it means standings cannot drift from the
+races they summarize.
+
+The one piece of denormalization that makes this work: `finishRace` writes the
+finishing order onto the **race document** as `result: {order, dnf}`, in the
+same transaction that appends `raceFinished`. Standings are then a pure function
+over the races listener the app already has open — no per-race participant
+fan-out, no `collectionGroup` index, no extra reads. `result` is a cache of the
+log in exactly the way the live doc is; the `raceFinished` event stays the
+record of truth.
+
+`finishRace` validates the order against `positionOrder` (no duplicates, nobody
+missing, no strangers) because a partial order would silently under-count a
+season rather than fail.
+
+Two scoring rules that look like bugs and aren't:
+
+- **A DNF scores `dnfPoints` regardless of track position**, so retiring from
+  the lead never out-scores finishing last.
+- **A retirement doesn't count as a podium and doesn't set `bestFinish`** — a
+  car that broke while running second did not finish second.
+
+Ties break on countback (most wins, then most seconds, …), then player id for a
+stable order.
+
+Season docs did not exist through Phase 1 — `createRace` wrote `seasonId:
+"default"` against nothing. `npm run seed-season` creates it, and is a no-op if
+it already exists so it can never clobber a scoring table tuned in the console.
+
 ## Conventions
 
 - **Next 16:** `params` is a `Promise` and must be awaited. A client component
@@ -93,7 +127,8 @@ countdown survives a wifi drop and the next-turn write queues until reconnect.
 ## Verification
 
 ```bash
-npm run smoke   # 24 end-to-end checks against the real project
+npm run smoke         # 39 end-to-end checks against the real project
+npm run seed-season   # create the default season if missing (idempotent)
 ```
 
 `scripts/smoke.ts` exercises the real transactions and a live listener — the
@@ -117,11 +152,21 @@ PostCSS advisories by downgrading Next.js to 9.3.3.
 **Phase 1 is done and verified**: table device, big-screen timer, standings
 nudging, per-car laps, manual correction.
 
-- **Phase 2 — the website.** Standings computed from `scoringConfig`, race
-  history, player pages, post-game review. Firebase Auth graduates from
-  anonymous to real accounts, and the rules tighten: right now any signed-in
-  caller can write anything, which suits a living room and not a public site.
-  A `roles`/custom-claim check gates campaign and series settings.
+- **Phase 2 — the website.** *In progress.*
+  - **Done:** season scoring and standings. `seasons/default` exists with a
+    real `scoringConfig`, `finishRace` denormalizes `result` onto the race doc,
+    `lib/scoring.ts` derives the table, and `/standings` renders it. The finish
+    path is now covered by the smoke test — it never had been.
+  - **Next:** race history and player pages (both are views over the same
+    `result` data), then post-game review to confirm the finishing order before
+    a race is sealed.
+  - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
+    rules tighten — right now any signed-in caller can write anything, which
+    suits a living room and not a public site. Decided: **Google sign-in**, with
+    admin gating via **custom claims set through the Firebase Admin SDK** (needs
+    a service account key in Vercel env and a route handler to set claims).
+    Anonymous auth stays alive for the table devices so game night still needs
+    no login.
 - **Phase 3 — the chatbot.** An *input adapter*, not a separate system. It gets
   the `lib/race.ts` functions as its tool surface and emits the same mutations
   the buttons do — never raw document writes. Anthropic calls go through a

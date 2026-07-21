@@ -30,6 +30,21 @@ export interface Season {
 
 export type RaceStatus = "scheduled" | "live" | "complete";
 
+/**
+ * The finishing order, denormalized onto the race document by finishRace in the
+ * same transaction that appends the raceFinished event.
+ *
+ * This is a cache of the log, exactly like the live doc: it makes season
+ * standings a pure function over the races listener — no per-race participant
+ * fan-out and no collectionGroup index — and it stays recoverable because the
+ * raceFinished event remains the record of truth.
+ */
+export interface RaceResult {
+  /** Finishing order, winner first. Retired cars are included AND listed in dnf. */
+  order: PlayerId[];
+  dnf: PlayerId[];
+}
+
 export interface Race {
   id: string;
   seasonId: string;
@@ -38,6 +53,25 @@ export interface Race {
   status: RaceStatus;
   /** Laps required to finish. Each lap spans many rounds. */
   lapCount: number;
+  /** Present only once the race is complete. Absent on live/scheduled races. */
+  result?: RaceResult;
+}
+
+/**
+ * One row of derived season standings. Never stored — computeStandings rebuilds
+ * it from finished races on every render, so it cannot drift from its inputs.
+ */
+export interface SeasonStanding {
+  playerId: PlayerId;
+  points: number;
+  races: number;
+  wins: number;
+  podiums: number;
+  dnfs: number;
+  /** Best classified finish; null if the driver has never seen the flag. */
+  bestFinish: number | null;
+  /** Count of finishes by position, index 0 = wins. Used for tie countback. */
+  finishCounts: number[];
 }
 
 export interface Participant {

@@ -209,6 +209,12 @@ export async function resetTurnClock(
   });
 }
 
+/**
+ * Seals the race. The finishing order is written onto the race doc as `result`
+ * in this same transaction, which is what lets season standings be a pure
+ * function over the races listener rather than a fan-out over participants.
+ * The raceFinished event remains the record of truth; `result` is a cache of it.
+ */
 export async function finishRace(
   raceId: string,
   order: PlayerId[],
@@ -216,8 +222,35 @@ export async function finishRace(
   who: Actor,
 ) {
   await runTransaction(db, async (tx) => {
-    await readLive(tx, raceId);
-    tx.update(raceDoc(raceId), { status: "complete" });
+    const live = await readLive(tx, raceId);
+
+    // Standings are derived from `order`, so a partial order would silently
+    // under-count a season. Fail loudly instead.
+    const expected = new Set(live.positionOrder);
+    const got = new Set(order);
+    if (got.size !== order.length) {
+      throw new Error("Finishing order contains a duplicate");
+    }
+    for (const playerId of expected) {
+      if (!got.has(playerId)) {
+        throw new Error(`Finishing order is missing ${playerId}`);
+      }
+    }
+    for (const playerId of got) {
+      if (!expected.has(playerId)) {
+        throw new Error(`${playerId} is not in this race`);
+      }
+    }
+    for (const playerId of dnf) {
+      if (!got.has(playerId)) {
+        throw new Error(`DNF ${playerId} is not in the finishing order`);
+      }
+    }
+
+    tx.update(raceDoc(raceId), {
+      status: "complete",
+      result: { order, dnf },
+    });
     tx.update(liveDoc(raceId), {
       currentPlayerId: null,
       turnStartedAt: null,

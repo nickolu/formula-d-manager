@@ -1,10 +1,19 @@
 "use client";
 
 import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { db } from "./firebase";
 import { liveDoc } from "./race";
-import type { LiveState, Participant, Player, PlayerId, Race } from "./types";
+import { computeStandings } from "./scoring";
+import { seasonDoc } from "./seasons";
+import type {
+  LiveState,
+  Participant,
+  Player,
+  PlayerId,
+  Race,
+  Season,
+} from "./types";
 
 /**
  * onSnapshot is server-push over Firestore's persistent connection, not a poll:
@@ -84,6 +93,41 @@ export function useRaces() {
   }, []);
 
   return races;
+}
+
+/**
+ * Scoring config is read live rather than bundled, so house rules can be edited
+ * in the Firestore console and every open standings page re-sorts immediately.
+ */
+export function useSeason(seasonId: string) {
+  const [season, setSeason] = useState<Season | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(seasonDoc(seasonId), (snap) => {
+      setSeason(snap.exists() ? ({ id: snap.id, ...snap.data() } as Season) : null);
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, [seasonId]);
+
+  return { season, loading };
+}
+
+/**
+ * Standings are derived, never stored. Both inputs are already streaming, so
+ * this adds no reads and cannot drift from the races it summarizes.
+ */
+export function useStandings(seasonId: string) {
+  const races = useRaces();
+  const { season, loading } = useSeason(seasonId);
+
+  const standings = useMemo(
+    () => (season ? computeStandings(races, season.scoringConfig, seasonId) : []),
+    [races, season, seasonId],
+  );
+
+  return { standings, season, loading };
 }
 
 /**

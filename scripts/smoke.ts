@@ -10,26 +10,46 @@
  * events survive under the deleted race; they are invisible to the app.
  */
 import { getAuth, signInAnonymously } from "firebase/auth";
-import { collection, deleteDoc, doc, getDocs, onSnapshot } from "firebase/firestore";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  onSnapshot,
+} from "firebase/firestore";
 import { app, db } from "../lib/firebase";
 import {
   advanceTurn,
   completeLap,
+  finishRace,
   liveDoc,
   pauseTurn,
   resumeTurn,
   setPositionOrder,
   uncompleteLap,
 } from "../lib/race";
+import { computeStandings, pointsFor } from "../lib/scoring";
+import { DEFAULT_SCORING } from "../lib/seasons";
 import { createRace } from "../lib/setup";
 import { readTimer } from "../lib/timer";
-import type { LiveState, Participant } from "../lib/types";
+import type { LiveState, Participant, Race } from "../lib/types";
 
 let failures = 0;
 
 function check(label: string, ok: boolean, detail = "") {
   console.log(`${ok ? "  ok  " : "FAIL  "}${label}${detail ? ` — ${detail}` : ""}`);
   if (!ok) failures++;
+}
+
+/** Asserts that a guard actually fires, rather than silently writing bad data. */
+async function rejects(fn: () => Promise<unknown>, label: string) {
+  try {
+    await fn();
+    check(label, false, "call unexpectedly succeeded");
+  } catch {
+    check(label, true);
+  }
 }
 
 /** Resolves when the listener reports a state matching the predicate. */
@@ -145,6 +165,80 @@ async function main() {
   check("lapCompleted logged 3x", types.filter((t) => t === "lapCompleted").length === 3);
   check("turnAdvanced logged 3x", types.filter((t) => t === "turnAdvanced").length === 3, `${types.filter((t) => t === "turnAdvanced").length}`);
   check("all events carry a source", events.docs.every((d) => !!d.data().source));
+
+  console.log("\nscoring is pure — no Firestore involved:");
+  check("winner takes the top of the table", pointsFor(1, false, DEFAULT_SCORING) === 10);
+  check("past the table scores the tail value", pointsFor(99, false, DEFAULT_SCORING) === DEFAULT_SCORING.pointsBeyondTable);
+  check(
+    "a DNF from the lead still scores a DNF",
+    pointsFor(1, true, DEFAULT_SCORING) === DEFAULT_SCORING.dnfPoints,
+  );
+
+  console.log("\nfinishing the race:");
+  await rejects(
+    () => finishRace(raceId, ["charlie", "alpha"], [], { source: "manual" }),
+    "a partial finishing order is refused",
+  );
+  await rejects(
+    () => finishRace(raceId, ["charlie", "alpha", "delta"], [], { source: "manual" }),
+    "a stranger in the finishing order is refused",
+  );
+
+  await finishRace(raceId, ["charlie", "alpha", "bravo"], ["bravo"], {
+    source: "manual",
+  });
+
+  const finished = (await getDoc(doc(db, "races", raceId))).data() as Race;
+  check("race is marked complete", finished.status === "complete", finished.status);
+  check(
+    "finishing order is denormalized onto the race",
+    finished.result?.order.join(",") === "charlie,alpha,bravo",
+    finished.result?.order.join(","),
+  );
+  check("dnf is recorded on the race", finished.result?.dnf.join(",") === "bravo");
+
+  const finalParticipants = await getDocs(
+    collection(db, "races", raceId, "participants"),
+  );
+  const byId = new Map(
+    finalParticipants.docs.map((d) => [d.id, d.data() as Participant]),
+  );
+  check(
+    "participants get their final positions",
+    byId.get("charlie")?.finalPosition === 1 &&
+      byId.get("alpha")?.finalPosition === 2 &&
+      byId.get("bravo")?.finalPosition === 3,
+  );
+  check("the retired car is flagged", byId.get("bravo")?.dnf === true);
+
+  const finishEvents = await getDocs(collection(db, "races", raceId, "events"));
+  check(
+    "raceFinished logged once",
+    finishEvents.docs.filter((d) => d.data().type === "raceFinished").length === 1,
+  );
+
+  console.log("\nstandings derive from the finished race:");
+  const standings = computeStandings([finished], DEFAULT_SCORING, "default");
+  const points = new Map(standings.map((s) => [s.playerId, s.points]));
+  check(
+    "points follow the finishing order",
+    points.get("charlie") === 10 && points.get("alpha") === 8,
+    `charlie=${points.get("charlie")} alpha=${points.get("alpha")}`,
+  );
+  check(
+    "the retirement scores dnfPoints, not third place",
+    points.get("bravo") === DEFAULT_SCORING.dnfPoints,
+    `bravo=${points.get("bravo")}`,
+  );
+  check("the winner leads the standings", standings[0]?.playerId === "charlie");
+  check(
+    "a retirement is not counted as a podium",
+    standings.find((s) => s.playerId === "bravo")?.podiums === 0,
+  );
+  check(
+    "a retirement leaves bestFinish unset",
+    standings.find((s) => s.playerId === "bravo")?.bestFinish === null,
+  );
 
   unsubscribe();
 
