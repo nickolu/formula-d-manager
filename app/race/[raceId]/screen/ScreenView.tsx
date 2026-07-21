@@ -29,6 +29,9 @@ export default function ScreenView({ raceId }: { raceId: string }) {
     ? live.roundOrder.indexOf(live.currentPlayerId)
     : -1;
 
+  // Absent on races created before retirement was modelled.
+  const retired = new Set(live.retired ?? []);
+
   return (
     <main className="flex min-h-screen flex-col justify-between bg-black p-10 text-white">
       <header className="flex items-baseline justify-between text-3xl text-neutral-400">
@@ -54,16 +57,19 @@ export default function ScreenView({ raceId }: { raceId: string }) {
           const roundIdx = live.roundOrder.indexOf(id);
           const alreadyMoved = roundIdx !== -1 && roundIdx < turnIndex;
           const laps = participants.get(id)?.lapsCompleted ?? 0;
+          const isOut = retired.has(id);
 
           return (
             <li
               key={id}
               className={
-                id === live.currentPlayerId
-                  ? "text-white"
-                  : alreadyMoved
-                    ? "text-neutral-600"
-                    : undefined
+                isOut
+                  ? "text-neutral-700 line-through"
+                  : id === live.currentPlayerId
+                    ? "text-white"
+                    : alreadyMoved
+                      ? "text-neutral-600"
+                      : undefined
               }
             >
               <span className="text-neutral-600">{i + 1}.</span> {nameOf(id)}

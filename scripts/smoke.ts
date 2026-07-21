@@ -26,6 +26,8 @@ import {
   liveDoc,
   pauseTurn,
   resumeTurn,
+  rewindTurn,
+  setDnf,
   setPositionOrder,
   uncompleteLap,
 } from "../lib/race";
@@ -52,17 +54,24 @@ async function rejects(fn: () => Promise<unknown>, label: string) {
   }
 }
 
-/** Resolves when the listener reports a state matching the predicate. */
+/**
+ * Resolves when the listener reports a state matching the predicate.
+ *
+ * `fromIndex` skips states seen before the action under test. Rewind revisits
+ * earlier positions, so a predicate like "charlie is up" would otherwise match
+ * a snapshot from several turns ago and resolve before the write lands.
+ */
 function waitFor(
   states: LiveState[],
   predicate: (s: LiveState) => boolean,
   label: string,
   timeoutMs = 10_000,
+  fromIndex = 0,
 ): Promise<LiveState> {
   return new Promise((resolve, reject) => {
     const started = Date.now();
     const poll = setInterval(() => {
-      const hit = states.findLast(predicate);
+      const hit = states.slice(fromIndex).findLast(predicate);
       if (hit) {
         clearInterval(poll);
         resolve(hit);
@@ -166,6 +175,84 @@ async function main() {
   check("turnAdvanced logged 3x", types.filter((t) => t === "turnAdvanced").length === 3, `${types.filter((t) => t === "turnAdvanced").length}`);
   check("all events carry a source", events.docs.every((d) => !!d.data().source));
 
+  // State here: round 2, roundOrder charlie,alpha,bravo, charlie to play.
+  console.log("\nstepping back through the turn order:");
+  let mark = states.length;
+  await advanceTurn(raceId, { source: "manual" });
+  await waitFor(states, (s) => s.currentPlayerId === "alpha", "alpha", 10_000, mark);
+
+  mark = states.length;
+  await rewindTurn(raceId, { source: "manual" });
+  const rewound = await waitFor(states, (s) => s.currentPlayerId === "charlie", "charlie again", 10_000, mark);
+  check("rewind steps back within the round", rewound.currentRound === 2, `round ${rewound.currentRound}`);
+  check("rewind leaves the round order alone", rewound.roundOrder.join(",") === "charlie,alpha,bravo");
+  check("rewind re-anchors the clock", !readTimer(rewound, Date.now()).isPaused);
+
+  mark = states.length;
+  await rewindTurn(raceId, { source: "manual" });
+  const crossed = await waitFor(states, (s) => s.currentRound === 1, "back in round 1", 10_000, mark);
+  check(
+    "rewind crosses one round boundary",
+    crossed.currentRound === 1,
+    `round ${crossed.currentRound}`,
+  );
+  check(
+    "the previous round's order is restored",
+    crossed.roundOrder.join(",") === "alpha,bravo,charlie",
+    crossed.roundOrder.join(","),
+  );
+  check("rewind lands on the last car of that round", crossed.currentPlayerId === "charlie");
+  check("only one round of history is kept", crossed.previousRoundOrder === null);
+
+  await rewindTurn(raceId, { source: "manual" }); // charlie -> bravo
+  await rewindTurn(raceId, { source: "manual" }); // bravo -> alpha
+  await rejects(
+    () => rewindTurn(raceId, { source: "manual" }),
+    "rewinding past the start of the race is refused",
+  );
+
+  // State here: round 1, roundOrder alpha,bravo,charlie, alpha to play.
+  console.log("\nretirement:");
+  await rejects(
+    () => setDnf(raceId, "delta", true, { source: "manual" }),
+    "retiring a car that isn't in the race is refused",
+  );
+
+  mark = states.length;
+  await setDnf(raceId, "bravo", true, { source: "manual" });
+  const out = await waitFor(states, (s) => (s.retired ?? []).includes("bravo"), "bravo retired", 10_000, mark);
+  check("retirement is cached on the live doc", out.retired?.join(",") === "bravo");
+  check(
+    "retirement mirrors onto the participant",
+    (await getDoc(doc(db, "races", raceId, "participants", "bravo"))).data()?.dnf === true,
+  );
+
+  mark = states.length;
+  await advanceTurn(raceId, { source: "manual" });
+  const skipped = await waitFor(states, (s) => s.currentPlayerId === "charlie", "charlie", 10_000, mark);
+  check("advanceTurn skips a retired car", skipped.currentRound === 1, `round ${skipped.currentRound}`);
+  check(
+    "the round order still holds the retired car",
+    skipped.roundOrder.join(",") === "alpha,bravo,charlie",
+    skipped.roundOrder.join(","),
+  );
+
+  mark = states.length;
+  await rewindTurn(raceId, { source: "manual" });
+  await waitFor(states, (s) => s.currentPlayerId === "alpha", "alpha", 10_000, mark);
+  check("rewind skips a retired car too", true);
+
+  mark = states.length;
+  await setDnf(raceId, "bravo", false, { source: "manual" });
+  await waitFor(states, (s) => (s.retired ?? []).length === 0, "bravo un-retired", 10_000, mark);
+  await advanceTurn(raceId, { source: "manual" });
+  const restored = await waitFor(states, (s) => s.currentPlayerId === "bravo", "bravo", 10_000, mark);
+  check("un-retiring puts the car back in the order", restored.currentPlayerId === "bravo");
+
+  // Left retired on purpose: the finish below passes an EMPTY dnf array, so the
+  // result proves finishRace unions in retirements it wasn't told about.
+  await setDnf(raceId, "bravo", true, { source: "manual" });
+
   console.log("\nscoring is pure — no Firestore involved:");
   check("winner takes the top of the table", pointsFor(1, false, DEFAULT_SCORING) === 10);
   check("past the table scores the tail value", pointsFor(99, false, DEFAULT_SCORING) === DEFAULT_SCORING.pointsBeyondTable);
@@ -184,7 +271,9 @@ async function main() {
     "a stranger in the finishing order is refused",
   );
 
-  await finishRace(raceId, ["charlie", "alpha", "bravo"], ["bravo"], {
+  // Empty dnf: bravo retired mid-race and must survive a finish form that
+  // doesn't mention them.
+  await finishRace(raceId, ["charlie", "alpha", "bravo"], [], {
     source: "manual",
   });
 
@@ -195,7 +284,11 @@ async function main() {
     finished.result?.order.join(",") === "charlie,alpha,bravo",
     finished.result?.order.join(","),
   );
-  check("dnf is recorded on the race", finished.result?.dnf.join(",") === "bravo");
+  check(
+    "a mid-race retirement survives a finish that omits it",
+    finished.result?.dnf.join(",") === "bravo",
+    finished.result?.dnf.join(","),
+  );
 
   const finalParticipants = await getDocs(
     collection(db, "races", raceId, "participants"),
@@ -212,9 +305,20 @@ async function main() {
   check("the retired car is flagged", byId.get("bravo")?.dnf === true);
 
   const finishEvents = await getDocs(collection(db, "races", raceId, "events"));
+  const finalTypes = finishEvents.docs.map((d) => d.data().type as string);
   check(
     "raceFinished logged once",
-    finishEvents.docs.filter((d) => d.data().type === "raceFinished").length === 1,
+    finalTypes.filter((t) => t === "raceFinished").length === 1,
+  );
+  check(
+    "every rewind is logged",
+    finalTypes.filter((t) => t === "turnRewound").length === 5,
+    `${finalTypes.filter((t) => t === "turnRewound").length}`,
+  );
+  check(
+    "every retirement change is logged",
+    finalTypes.filter((t) => t === "dnfChanged").length === 3,
+    `${finalTypes.filter((t) => t === "dnfChanged").length}`,
   );
 
   console.log("\nstandings derive from the finished race:");

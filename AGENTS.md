@@ -41,6 +41,13 @@ once: the round ends and the next `roundOrder` is snapshotted from
 a mid-round overtake affect the *next* round instead of reshuffling a round
 already in progress.
 
+`rewindTurn` walks the same list backwards, for a mis-tapped turn. Because
+rollover overwrites `roundOrder`, it can only cross a boundary thanks to
+`previousRoundOrder` — one round of history, saved by `advanceTurn` at each
+rollover and cleared once used. Rewinding deliberately does **not** try to
+restore `positionOrder`: standings are human-nudged and the operator is looking
+straight at the board.
+
 **A round is not a lap.** One round = every car moves once. A lap spans many
 rounds. And laps are *per car* — the leader can be on lap 2 while a back marker
 is on lap 1 — so `currentRound` is global on the live doc while `lapsCompleted`
@@ -49,6 +56,25 @@ lives on each participant. There is no global lap counter, deliberately.
 The app does **not** model the board: no car positions, no gear, no wear tokens.
 Humans nudge the standings when an overtake happens. Adding board state was
 explicitly rejected — it re-implements the game and can desync from the table.
+
+**Retirement is live state, not a finishing attribute.** A car that breaks on
+lap 1 stops taking turns immediately, so `setDnf` writes `participants/{id}.dnf`
+*and* a cached `retired` list on the live doc, in one transaction. The list is
+duplicated onto the live doc so `advanceTurn` can skip retired cars from a
+single document read instead of fanning out over participants — the same bargain
+as `result` on the race doc, and every open listener gets it free.
+
+`advanceTurn` and `rewindTurn` skip retired cars **at selection time**; they do
+not filter `roundOrder` itself. Keeping the snapshot faithful to the round that
+actually started is what makes un-retiring reversible mid-round, and it keeps
+the `turnIndex`/`alreadyMoved` arithmetic in the views working unchanged.
+Retiring the current player does *not* auto-advance the turn — the human taps
+Next turn and the skip takes over; auto-advancing would fight the person holding
+the tablet.
+
+`finishRace` unions its `dnf` argument with `live.retired`, so a finish form
+can't silently un-retire a car that broke three rounds ago. Un-retiring goes
+through `setDnf`, which leaves a trail.
 
 ## The timer is state, not a process
 
@@ -123,11 +149,22 @@ it already exists so it can never clobber a scoring table tuned in the console.
   House rules churn; changing them must not require a deploy.
 - Every event carries `source: "manual" | "chat" | "system"` so chat-entered
   mistakes stay traceable.
+- The three race screens are `/race/:id/device` (the tablet), `/race/:id/screen`
+  (the big screen) and `/race/:id/edit` (corrections). The old `/table` and
+  `/entry` paths permanently redirect, because the tablets had them bookmarked.
+- `app/Nav.tsx` is opt-in per page, **not** rendered from `layout.tsx`. The big
+  screen is read from across a room and the tablet's buttons are sized for a
+  thumb at arm's length; neither wants nav chrome, and the layout would give
+  both one.
+- Drag-to-reorder (`app/ReorderableList.tsx`) is built on pointer events, not
+  HTML5 drag-and-drop. Native drag events never fire on touch, so `draggable`
+  would silently do nothing on the tablet — the one screen it's for. The ↑/↓
+  buttons stay as a fallback.
 
 ## Verification
 
 ```bash
-npm run smoke         # 39 end-to-end checks against the real project
+npm run smoke         # 57 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 
@@ -157,6 +194,9 @@ nudging, per-car laps, manual correction.
     real `scoringConfig`, `finishRace` denormalizes `result` onto the race doc,
     `lib/scoring.ts` derives the table, and `/standings` renders it. The finish
     path is now covered by the smoke test — it never had been.
+  - **Done:** UI pass over the two interactive screens — drag-to-reorder
+    standings, mid-race retirement that skips a car's turns, a reverse gear for
+    a mis-tapped turn, and global nav. `table`/`entry` became `device`/`edit`.
   - **Next:** race history and player pages (both are views over the same
     `result` data), then post-game review to confirm the finishing order before
     a race is sealed.

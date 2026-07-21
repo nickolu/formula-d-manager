@@ -45,6 +45,24 @@ async function readLive(tx: Transaction, raceId: string): Promise<LiveState> {
 }
 
 /**
+ * Retired cars are skipped at selection time rather than being filtered out of
+ * roundOrder itself. Keeping the snapshot faithful to the round that was
+ * actually started is what makes un-retiring reversible mid-round, and it keeps
+ * the turnIndex/alreadyMoved arithmetic in the views working unchanged.
+ */
+function nextRunner(
+  order: PlayerId[],
+  retired: Set<PlayerId>,
+  from: number,
+  step: 1 | -1,
+) {
+  for (let i = from; i >= 0 && i < order.length; i += step) {
+    if (!retired.has(order[i])) return i;
+  }
+  return -1;
+}
+
+/**
  * Steps through the current round's frozen order. Running off the end means
  * every car has moved once: the round ends, and the next round's order is
  * snapshotted from current standings — which is how a mid-round overtake
@@ -57,21 +75,31 @@ export async function advanceTurn(raceId: string, who: Actor) {
     const live = await readLive(tx, raceId);
     if (live.roundOrder.length === 0) throw new Error("Round order is empty");
 
+    const retired = new Set(live.retired ?? []);
     const index = live.currentPlayerId
       ? live.roundOrder.indexOf(live.currentPlayerId)
       : -1;
-    const nextIndex = index + 1;
-    const roundOver = nextIndex >= live.roundOrder.length;
+
+    const withinRound = nextRunner(live.roundOrder, retired, index + 1, 1);
+    const roundOver = withinRound === -1;
 
     const nextRound = roundOver ? live.currentRound + 1 : live.currentRound;
     const nextOrder = roundOver ? live.positionOrder : live.roundOrder;
-    const nextPlayer = nextOrder[roundOver ? 0 : nextIndex];
+    const nextIndex = roundOver
+      ? nextRunner(nextOrder, retired, 0, 1)
+      : withinRound;
+
+    // Without this the loop would either spin or park the turn on nobody.
+    if (nextIndex === -1) throw new Error("Every car has retired");
 
     tx.update(liveDoc(raceId), {
-      currentPlayerId: nextPlayer,
+      currentPlayerId: nextOrder[nextIndex],
       turnStartedAt: serverTimestamp(),
       currentRound: nextRound,
       roundOrder: nextOrder,
+      // Rollover destroys the outgoing order; keep one round of it so a
+      // mis-tap on a round's first car is still recoverable.
+      ...(roundOver ? { previousRoundOrder: live.roundOrder } : {}),
       updatedAt: serverTimestamp(),
     });
 
@@ -86,9 +114,108 @@ export async function advanceTurn(raceId: string, who: Actor) {
     appendEvent(tx, raceId, who, {
       type: "turnAdvanced",
       fromPlayerId: live.currentPlayerId,
-      toPlayerId: nextPlayer,
+      toPlayerId: nextOrder[nextIndex],
       round: nextRound,
     });
+  });
+}
+
+/**
+ * The reverse gear for a mis-tapped turn. Steps back one car, crossing at most
+ * one round boundary — that is the whole reason advanceTurn saves
+ * previousRoundOrder.
+ *
+ * Re-anchors the clock, so the corrected player gets a fresh turn. It makes no
+ * attempt to restore positionOrder as it was: standings are human-nudged and
+ * the operator is looking straight at the board.
+ */
+export async function rewindTurn(raceId: string, who: Actor) {
+  await runTransaction(db, async (tx) => {
+    const live = await readLive(tx, raceId);
+
+    const retired = new Set(live.retired ?? []);
+    const index = live.currentPlayerId
+      ? live.roundOrder.indexOf(live.currentPlayerId)
+      : live.roundOrder.length;
+
+    const withinRound = nextRunner(live.roundOrder, retired, index - 1, -1);
+
+    if (withinRound !== -1) {
+      const target = live.roundOrder[withinRound];
+      tx.update(liveDoc(raceId), {
+        currentPlayerId: target,
+        turnStartedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      appendEvent(tx, raceId, who, {
+        type: "turnRewound",
+        fromPlayerId: live.currentPlayerId,
+        toPlayerId: target,
+        round: live.currentRound,
+      });
+      return;
+    }
+
+    // Crossing back into the previous round. Only one round is kept.
+    const previous = live.previousRoundOrder;
+    if (live.currentRound <= 1 || !previous || previous.length === 0) {
+      throw new Error("Nothing to rewind to");
+    }
+
+    const lastIndex = nextRunner(previous, retired, previous.length - 1, -1);
+    if (lastIndex === -1) throw new Error("Every car has retired");
+
+    tx.update(liveDoc(raceId), {
+      currentPlayerId: previous[lastIndex],
+      turnStartedAt: serverTimestamp(),
+      currentRound: live.currentRound - 1,
+      roundOrder: previous,
+      previousRoundOrder: null,
+      updatedAt: serverTimestamp(),
+    });
+
+    appendEvent(tx, raceId, who, {
+      type: "turnRewound",
+      fromPlayerId: live.currentPlayerId,
+      toPlayerId: previous[lastIndex],
+      round: live.currentRound - 1,
+    });
+  });
+}
+
+/**
+ * Retirement is live state, not just a finishing attribute — a car that breaks
+ * on lap 1 should stop taking turns immediately. Writes both the participant
+ * doc and the live doc's cached list in one transaction; the event stays the
+ * record of truth.
+ *
+ * Deliberately does NOT move the turn on when the current player retires. The
+ * human taps Next turn and the skip logic takes it from there; auto-advancing
+ * would fight the person holding the tablet.
+ */
+export async function setDnf(
+  raceId: string,
+  playerId: PlayerId,
+  dnf: boolean,
+  who: Actor,
+) {
+  await runTransaction(db, async (tx) => {
+    const live = await readLive(tx, raceId);
+    const snap = await tx.get(participantDoc(raceId, playerId));
+    if (!snap.exists()) throw new Error(`${playerId} is not in this race`);
+
+    const retired = new Set(live.retired ?? []);
+    if (retired.has(playerId) === dnf) return; // already there
+
+    if (dnf) retired.add(playerId);
+    else retired.delete(playerId);
+
+    tx.update(participantDoc(raceId, playerId), { dnf });
+    tx.update(liveDoc(raceId), {
+      retired: [...retired],
+      updatedAt: serverTimestamp(),
+    });
+    appendEvent(tx, raceId, who, { type: "dnfChanged", playerId, dnf });
   });
 }
 
@@ -224,6 +351,11 @@ export async function finishRace(
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
 
+    // Cars that retired mid-race are already retired; a finishing form must not
+    // be able to silently un-retire one by omitting it. Un-retiring goes
+    // through setDnf, which leaves a trail.
+    const retirements = [...new Set([...dnf, ...(live.retired ?? [])])];
+
     // Standings are derived from `order`, so a partial order would silently
     // under-count a season. Fail loudly instead.
     const expected = new Set(live.positionOrder);
@@ -241,7 +373,7 @@ export async function finishRace(
         throw new Error(`${playerId} is not in this race`);
       }
     }
-    for (const playerId of dnf) {
+    for (const playerId of retirements) {
       if (!got.has(playerId)) {
         throw new Error(`DNF ${playerId} is not in the finishing order`);
       }
@@ -249,7 +381,7 @@ export async function finishRace(
 
     tx.update(raceDoc(raceId), {
       status: "complete",
-      result: { order, dnf },
+      result: { order, dnf: retirements },
     });
     tx.update(liveDoc(raceId), {
       currentPlayerId: null,
@@ -261,11 +393,15 @@ export async function finishRace(
     order.forEach((playerId, i) => {
       tx.update(participantDoc(raceId, playerId), {
         finalPosition: i + 1,
-        dnf: dnf.includes(playerId),
+        dnf: retirements.includes(playerId),
       });
     });
 
-    appendEvent(tx, raceId, who, { type: "raceFinished", order, dnf });
+    appendEvent(tx, raceId, who, {
+      type: "raceFinished",
+      order,
+      dnf: retirements,
+    });
   });
 }
 

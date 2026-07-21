@@ -53,6 +53,8 @@ export async function createRace(input: NewRaceInput): Promise<string> {
     // frozen order; they diverge as soon as anyone overtakes.
     positionOrder: ids,
     roundOrder: ids,
+    retired: [],
+    previousRoundOrder: null,
     updatedAt: serverTimestamp(),
   });
 

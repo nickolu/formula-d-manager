@@ -5,10 +5,13 @@ import { useLiveState, useParticipants, usePlayers } from "@/lib/hooks";
 import {
   completeLap,
   finishRace,
+  setDnf,
   setPositionOrder,
   uncompleteLap,
 } from "@/lib/race";
 import type { PlayerId } from "@/lib/types";
+import Nav from "@/app/Nav";
+import ReorderableList from "@/app/ReorderableList";
 import StaleRace from "@/app/StaleRace";
 
 /**
@@ -16,11 +19,10 @@ import StaleRace from "@/app/StaleRace";
  * emits these same mutations rather than writing documents itself, so anything
  * it gets wrong is fixable here.
  */
-export default function EntryView({ raceId }: { raceId: string }) {
+export default function EditView({ raceId }: { raceId: string }) {
   const { live, loading } = useLiveState(raceId);
   const players = usePlayers();
   const participants = useParticipants(raceId);
-  const [dnf, setDnf] = useState<Set<PlayerId>>(new Set());
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
 
@@ -30,6 +32,10 @@ export default function EntryView({ raceId }: { raceId: string }) {
   const [draft, setDraft] = useState<PlayerId[] | null>(null);
   const order = draft ?? live?.positionOrder ?? [];
 
+  // Retirement is live state now, not a local checkbox: the device view and
+  // this one read the same list and cannot disagree about who is out.
+  const retired = new Set(live?.retired ?? []);
+
   const nameOf = (id: string) => players.get(id)?.displayName ?? id;
 
   function move(index: number, delta: number) {
@@ -38,13 +44,6 @@ export default function EntryView({ raceId }: { raceId: string }) {
     if (target < 0 || target >= next.length) return;
     [next[index], next[target]] = [next[target], next[index]];
     setDraft(next);
-  }
-
-  function toggleDnf(id: PlayerId) {
-    const next = new Set(dnf);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setDnf(next);
   }
 
   async function run(label: string, action: () => Promise<void>, unpin = true) {
@@ -67,24 +66,34 @@ export default function EntryView({ raceId }: { raceId: string }) {
 
   return (
     <main className="mx-auto flex w-full max-w-xl flex-col gap-6 p-6">
-      <h1 className="text-2xl font-semibold">
-        Manual entry
-        <span className="ml-3 text-base font-normal text-neutral-500">
-          round {live.currentRound}
-        </span>
-      </h1>
+      <Nav raceId={raceId} />
 
-      <ol className="flex flex-col gap-2">
-        {order.map((id, i) => {
+      <div>
+        <h1 className="text-2xl font-semibold">
+          Edit race
+          <span className="ml-3 text-base font-normal text-neutral-500">
+            round {live.currentRound}
+          </span>
+        </h1>
+        <p className="mt-1 text-sm text-neutral-500">
+          {order.length} {order.length === 1 ? "player" : "players"}
+          {retired.size > 0 && ` · ${retired.size} retired`}
+        </p>
+      </div>
+
+      <ReorderableList
+        items={order}
+        disabled={busy}
+        onReorder={setDraft}
+        renderRow={(id, i) => {
           const laps = participants.get(id)?.lapsCompleted ?? 0;
+          const isOut = retired.has(id);
+
           return (
-            <li
-              key={id}
-              className="flex items-center gap-2 rounded border border-neutral-800 p-3"
-            >
+            <div className="flex items-center gap-2 rounded border border-neutral-800 p-3">
               <span className="w-5 text-neutral-500">{i + 1}</span>
               <span
-                className={`flex-1 ${dnf.has(id) ? "line-through opacity-50" : ""}`}
+                className={`flex-1 ${isOut ? "line-through opacity-50" : ""}`}
               >
                 {nameOf(id)}
               </span>
@@ -114,29 +123,40 @@ export default function EntryView({ raceId }: { raceId: string }) {
               </button>
 
               <button
-                onClick={() => toggleDnf(id)}
-                className="rounded border border-neutral-700 px-2 py-1 text-xs text-neutral-400"
+                onClick={() =>
+                  run(
+                    isOut ? `${nameOf(id)} is back in` : `${nameOf(id)} retired`,
+                    () => setDnf(raceId, id, !isOut, { source: "manual" }),
+                    false,
+                  )
+                }
+                disabled={busy}
+                className={`rounded border px-2 py-1 text-xs disabled:opacity-30 ${
+                  isOut
+                    ? "border-red-800 bg-red-950/50 text-red-400"
+                    : "border-neutral-700 text-neutral-400"
+                }`}
               >
                 DNF
               </button>
               <button
                 onClick={() => move(i, -1)}
-                disabled={i === 0}
+                disabled={busy || i === 0}
                 className="rounded border border-neutral-700 px-3 py-1 disabled:opacity-30"
               >
                 ↑
               </button>
               <button
                 onClick={() => move(i, 1)}
-                disabled={i === order.length - 1}
+                disabled={busy || i === order.length - 1}
                 className="rounded border border-neutral-700 px-3 py-1 disabled:opacity-30"
               >
                 ↓
               </button>
-            </li>
+            </div>
           );
-        })}
-      </ol>
+        }}
+      />
 
       <div className="flex flex-col gap-3">
         <button
@@ -155,7 +175,7 @@ export default function EntryView({ raceId }: { raceId: string }) {
           disabled={busy}
           onClick={() =>
             run("Race finished", () =>
-              finishRace(raceId, order, [...dnf], { source: "manual" }),
+              finishRace(raceId, order, [...retired], { source: "manual" }),
             )
           }
           className="rounded border border-red-800 py-3 text-red-400 disabled:opacity-50"

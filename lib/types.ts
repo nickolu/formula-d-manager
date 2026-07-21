@@ -108,6 +108,22 @@ export interface LiveState {
   currentRound: number;
   positionOrder: PlayerId[];
   roundOrder: PlayerId[];
+  /**
+   * Cars that have retired. Mirrored onto participants/{id}.dnf, but kept here
+   * too so advanceTurn can skip them from a single document read rather than
+   * fanning out over participants — and so every open listener gets the state
+   * for free. Same denormalization bargain as `result` on the race doc.
+   *
+   * Optional: races created before retirement was modelled simply lack it.
+   */
+  retired?: PlayerId[];
+  /**
+   * The outgoing roundOrder, saved at each rollover. Rollover overwrites
+   * roundOrder with a fresh snapshot of positionOrder, which would otherwise
+   * make the first turn of a round impossible to step back from. One round of
+   * history is all rewindTurn keeps.
+   */
+  previousRoundOrder?: PlayerId[] | null;
   updatedAt: Timestamp;
 }
 
@@ -158,6 +174,25 @@ export interface LapCompletedEvent extends BaseEvent {
   round: number;
 }
 
+/**
+ * A car retired, or a retirement was reverted. Retirement is live race state,
+ * not just a finishing attribute: a car that breaks on lap 1 stops taking turns
+ * immediately.
+ */
+export interface DnfChangedEvent extends BaseEvent {
+  type: "dnfChanged";
+  playerId: PlayerId;
+  dnf: boolean;
+}
+
+/** A mis-tapped turn, stepped back. Appended like any other mutation. */
+export interface TurnRewoundEvent extends BaseEvent {
+  type: "turnRewound";
+  fromPlayerId: PlayerId | null;
+  toPlayerId: PlayerId;
+  round: number;
+}
+
 export interface TurnPausedEvent extends BaseEvent {
   type: "turnPaused";
   remainingMs: number;
@@ -189,6 +224,8 @@ export type RaceEvent =
   | RoundStartedEvent
   | PositionOrderChangedEvent
   | LapCompletedEvent
+  | DnfChangedEvent
+  | TurnRewoundEvent
   | TurnPausedEvent
   | TurnResumedEvent
   | RaceFinishedEvent
