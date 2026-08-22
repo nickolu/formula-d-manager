@@ -1,8 +1,14 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useLiveState, usePlayers, useRace } from "@/lib/hooks";
-import { removePlayer, setPositionOrder, updateRaceSettings } from "@/lib/race";
+import {
+  deleteRace,
+  removePlayer,
+  setPositionOrder,
+  updateRaceSettings,
+} from "@/lib/race";
 import ReorderableList from "@/app/ReorderableList";
 import type { PlayerId } from "@/lib/types";
 
@@ -20,6 +26,8 @@ export default function SettingsView({ raceId }: { raceId: string }) {
   const { race, loading } = useRace(raceId);
   const { live } = useLiveState(raceId);
   const players = usePlayers();
+  const router = useRouter();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -45,7 +53,7 @@ export default function SettingsView({ raceId }: { raceId: string }) {
   }
 
   if (loading) return <p className="p-4 text-neutral-400">Connecting…</p>;
-  if (!race) return <p className="p-4 text-neutral-400">No race here.</p>;
+  if (!race) return <p className="p-4 text-neutral-400">Race not found.</p>;
 
   const scheduled = race.status === "scheduled";
   const grid = live?.positionOrder ?? [];
@@ -207,6 +215,63 @@ export default function SettingsView({ raceId }: { raceId: string }) {
               ))}
             </ol>
           </>
+        )}
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-xs uppercase tracking-widest text-red-900">
+          Danger
+        </h2>
+
+        {race.status !== "complete" ? (
+          <p className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-400">
+            A race can only be deleted once it has been finished on the results
+            screen.
+          </p>
+        ) : confirmingDelete ? (
+          // Named, and with the consequence spelled out. A generic "Are you
+          // sure?" on a phone gets tapped through without being read.
+          <div className="flex flex-col gap-3 rounded-2xl border border-red-900 p-4">
+            <p className="text-sm">
+              Delete <span className="font-semibold">{race.track}</span>?
+            </p>
+            <p className="text-xs text-neutral-400">
+              Season standings are worked out from finished races, so removing
+              this one rewrites the table. The race&rsquo;s history is kept —
+              events can never be deleted — but nothing will be able to reach
+              it.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmingDelete(false)}
+                disabled={busy}
+                className="flex-1 rounded-xl border border-neutral-700 py-3 disabled:opacity-50"
+              >
+                Keep it
+              </button>
+              <button
+                onClick={() =>
+                  run("Deleted", async () => {
+                    await deleteRace(raceId);
+                    // Nothing here resolves any more; the landing page does.
+                    router.push("/");
+                  })
+                }
+                disabled={busy}
+                className="flex-1 rounded-xl bg-red-900 py-3 disabled:opacity-50"
+              >
+                Delete race
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => setConfirmingDelete(true)}
+            disabled={busy}
+            className="w-full rounded-2xl border border-red-900 py-4 text-red-400 disabled:opacity-50"
+          >
+            Delete this race
+          </button>
         )}
       </section>
 

@@ -12,7 +12,6 @@
 import { getAuth, signInAnonymously } from "firebase/auth";
 import {
   collection,
-  deleteDoc,
   deleteField,
   doc,
   getDoc,
@@ -24,6 +23,7 @@ import { app, db } from "../lib/firebase";
 import {
   advanceTurn,
   completeLap,
+  deleteRace,
   finishRace,
   liveDoc,
   pauseTurn,
@@ -431,6 +431,11 @@ async function main() {
   // result proves finishRace unions in retirements it wasn't told about.
   await setDnf(raceId, "bravo", true, { source: "manual" });
 
+  await rejects(
+    () => deleteRace(raceId),
+    "a race that hasn't been finished cannot be deleted",
+  );
+
   console.log("\nscoring is pure — no Firestore involved:");
   check("winner takes the top of the table", pointsFor(1, false, DEFAULT_SCORING) === 10);
   check("past the table scores the tail value", pointsFor(99, false, DEFAULT_SCORING) === DEFAULT_SCORING.pointsBeyondTable);
@@ -524,13 +529,22 @@ async function main() {
 
   unsubscribe();
 
-  console.log("\ncleaning up…");
-  for (const p of (await getDocs(collection(db, "races", raceId, "participants"))).docs) {
-    await deleteDoc(p.ref);
-  }
-  await deleteDoc(liveDoc(raceId));
-  await deleteDoc(doc(db, "races", raceId));
-  console.log("race removed (events remain by design)");
+  console.log("\ndeleting the race — which is also the cleanup:");
+  await deleteRace(raceId);
+  check("the race document is gone", !(await getDoc(doc(db, "races", raceId))).exists());
+  check("the live state is gone", !(await getDoc(liveDoc(raceId))).exists());
+  check(
+    "the participants are gone",
+    (await getDocs(collection(db, "races", raceId, "participants"))).empty,
+  );
+  check(
+    "the event log survives, orphaned by design",
+    !(await getDocs(collection(db, "races", raceId, "events"))).empty,
+  );
+  await rejects(
+    () => deleteRace(raceId),
+    "deleting a race that is already gone is refused",
+  );
 
   console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}`);
   process.exit(failures === 0 ? 0 : 1);

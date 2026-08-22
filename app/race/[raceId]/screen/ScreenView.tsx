@@ -22,7 +22,7 @@ export default function ScreenView({ raceId }: { raceId: string }) {
 
   if (loading) return <Centered>Connecting…</Centered>;
   if (error) return <Centered>Connection error: {error.message}</Centered>;
-  if (!live) return <Centered>No live race here yet.</Centered>;
+  if (!live) return <Centered>Race not found.</Centered>;
   if (!live.positionOrder || !live.roundOrder) return <StaleRace />;
 
   // Before the flag drops there is no turn and no running clock. Showing the

@@ -80,7 +80,8 @@ export default function PlayerView({ raceId }: { raceId: string }) {
 
   if (loading) return <p className="p-8 text-neutral-400">Connecting…</p>;
   if (error) return <p className="p-8 text-red-500">{error.message}</p>;
-  if (!live) return <p className="p-8 text-neutral-400">No live race here yet.</p>;
+  // A deleted race leaves every listener with a null snapshot.
+  if (!live) return <p className="p-8 text-neutral-400">Race not found.</p>;
   if (!live.positionOrder || !live.roundOrder) return <StaleRace />;
 
   // A scheduled race has a grid and a stopped clock but no turn order yet.

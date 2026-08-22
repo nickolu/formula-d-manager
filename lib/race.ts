@@ -1,6 +1,9 @@
 import {
   collection,
+  deleteDoc,
   doc,
+  getDoc,
+  getDocs,
   increment,
   runTransaction,
   serverTimestamp,
@@ -669,6 +672,40 @@ export async function finishRace(
       dnf: retirements,
     });
   });
+}
+
+/**
+ * Removes a race: its participants, its live state, and the race document.
+ *
+ * **This is the one mutation here that appends no event** — there would be
+ * nowhere to append it to. That is a deliberate exception to the project's
+ * central rule, not an oversight.
+ *
+ * The event log survives. `firestore.rules` sets `allow update, delete: if
+ * false` on event documents on purpose, so the events are left orphaned under
+ * a race that no longer exists — invisible to the app, since nothing queries
+ * events except scoped to a race. This is the same bargain scripts/smoke.ts
+ * makes when it cleans up after itself. Do not loosen the rules to "fix" it.
+ *
+ * Refuses anything that is not complete. "You have to end it first" is a data
+ * rule, not a button state, so it is enforced here rather than only in the UI.
+ *
+ * Not a transaction: Firestore has no client-side recursive delete, so the
+ * subcollection has to be enumerated. The race document goes LAST, so a
+ * failure part-way leaves a findable race rather than orphaned subcollections.
+ */
+export async function deleteRace(raceId: string) {
+  const snap = await getDoc(raceDoc(raceId));
+  if (!snap.exists()) throw new Error(`No race ${raceId}`);
+  const status = (snap.data() as { status?: string }).status;
+  if (status !== "complete") {
+    throw new Error("Finish the race before deleting it");
+  }
+
+  const participants = await getDocs(collection(db, "races", raceId, "participants"));
+  await Promise.all(participants.docs.map((d) => deleteDoc(d.ref)));
+  await deleteDoc(liveDoc(raceId));
+  await deleteDoc(raceDoc(raceId));
 }
 
 /** Corrections append rather than mutate, preserving the audit trail. */

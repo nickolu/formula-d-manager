@@ -61,7 +61,7 @@ export default function ResultsView({ raceId }: { raceId: string }) {
   }
 
   if (loading) return <p className="p-8 text-neutral-400">Connecting…</p>;
-  if (!live) return <p className="p-8 text-neutral-400">No live race here yet.</p>;
+  if (!live) return <p className="p-8 text-neutral-400">Race not found.</p>;
   if (!live.positionOrder) return <StaleRace />;
 
   return (

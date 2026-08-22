@@ -209,6 +209,15 @@ it already exists so it can never clobber a scoring table tuned in the console.
 - **Nobody's turn means two different things** — the race is over, or it is
   between rounds. Every view discriminates on `race.status === "complete"`,
   never on the null `currentPlayerId`. `finishRace` nulls it too.
+- **`deleteRace` is the one mutation that appends no event** — there would be
+  nowhere to append it to. The event log survives: the rules forbid deleting
+  event documents, so they are left orphaned under a race that no longer
+  exists, invisible to the app because nothing queries events except scoped to
+  a race. Do not loosen the rules to "fix" it. It refuses anything that is not
+  `complete` — that is a data rule, not a button state — and it deletes
+  participants, then the live doc, then the race doc **last**, so a failure
+  part-way leaves a findable race rather than orphaned subcollections. It is
+  not a transaction because Firestore has no client-side recursive delete.
 - **`advanceTurn` deliberately does not check the race status.** It is the hot
   path — once per turn, per race — and adding a race-doc read would double its
   cost to guard against something no screen offers.
@@ -274,7 +283,7 @@ it already exists so it can never clobber a scoring table tuned in the console.
 ## Verification
 
 ```bash
-npm run smoke         # 99 end-to-end checks against the real project
+npm run smoke         # 105 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 
@@ -315,6 +324,8 @@ nudging, per-car laps, manual correction.
   - **Done:** rewinding a turn now resets the clock and leaves it paused.
   - **Done:** the player view is a route with subviews and a bottom tab bar,
     and the first subview is history — the event log read back as sentences.
+  - **Done:** race deletion, from race settings and behind a named confirmation
+    that says it will rewrite the season table.
   - **Done:** a between-rounds pause — the table confirms the order before the
     next round's clock starts. On by default, switchable in race settings.
   - **Done:** a race settings subview, and `scheduled` given real meaning —

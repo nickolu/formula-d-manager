@@ -61,7 +61,7 @@ at zero, and nothing happens mechanically — it's social pressure only.
 ```bash
 npm run dev     # dev server
 npm run build   # production build
-npm run smoke   # 99 end-to-end checks against the real Firestore project
+npm run smoke   # 105 end-to-end checks against the real Firestore project
 npm run lint
 ```
 
