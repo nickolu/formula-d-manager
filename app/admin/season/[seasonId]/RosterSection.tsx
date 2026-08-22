@@ -39,9 +39,6 @@ export default function RosterSection({ seasonId }: { seasonId: string }) {
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-500">
-        Roster
-      </h2>
       <p className="text-sm text-neutral-400">
         Adding someone puts them in every race here that has not finished yet.
         Finished races are never touched — a player who joined late shows up in

@@ -21,8 +21,8 @@ export default function SeasonsAdmin() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit() {
+    if (!name.trim()) return;
     setBusy(true);
     setError(null);
     try {
@@ -40,18 +40,57 @@ export default function SeasonsAdmin() {
   const archived = seasons.filter((s) => s.archived);
 
   return (
-    <div className="mt-8 flex flex-col gap-8">
-      <form onSubmit={submit} className="flex flex-col gap-3">
-        <h2 className="text-xl font-medium">New season</h2>
+    <div className="mt-8 flex flex-col gap-10">
+      {/* The list first: arriving here usually means reaching for a season that
+          already exists. Making one is a once-a-year act, and it sits below. */}
+      <section>
+        {loading ? (
+          <p className="text-neutral-500">Loading seasons…</p>
+        ) : active.length === 0 && archived.length === 0 ? (
+          <p className="rounded border border-neutral-800 p-4 text-neutral-400">
+            No seasons yet. A race has to belong to one, so make a season first.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {active.map((season) => (
+              <SeasonRow key={season.id} season={season} />
+            ))}
+          </ul>
+        )}
+
+        {archived.length > 0 && (
+          <details className="mt-4 rounded border border-neutral-800">
+            <summary className="cursor-pointer select-none p-3 text-sm uppercase tracking-widest text-neutral-500">
+              Archived ({archived.length})
+            </summary>
+            <ul className="flex flex-col gap-2 p-3 pt-0">
+              {archived.map((season) => (
+                <SeasonRow key={season.id} season={season} muted />
+              ))}
+            </ul>
+          </details>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-3 border-t border-neutral-900 pt-8">
+        <h2 className="text-xs uppercase tracking-widest text-neutral-500">
+          New season
+        </h2>
         <div className="flex gap-2">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              submit();
+            }}
             placeholder="Season 2"
-            className="flex-1 rounded border border-neutral-700 bg-transparent p-2"
+            className="min-w-0 flex-1 rounded border border-neutral-700 bg-transparent p-3"
           />
           <button
-            type="submit"
+            type="button"
+            onClick={submit}
             disabled={busy || !name.trim()}
             className="rounded bg-emerald-600 px-5 font-medium disabled:opacity-50"
           >
@@ -63,36 +102,6 @@ export default function SeasonsAdmin() {
           page — it is data, not code, so changing it never needs a deploy.
         </p>
         {error && <p className="text-red-500">{error}</p>}
-      </form>
-
-      <section>
-        <h2 className="text-xl font-medium">Seasons</h2>
-        {loading ? (
-          <p className="mt-4 text-neutral-500">Loading seasons…</p>
-        ) : active.length === 0 && archived.length === 0 ? (
-          <p className="mt-4 rounded border border-neutral-800 p-4 text-neutral-400">
-            No seasons yet. A race has to belong to one, so make a season first.
-          </p>
-        ) : (
-          <ul className="mt-4 flex flex-col gap-2">
-            {active.map((season) => (
-              <SeasonRow key={season.id} season={season} />
-            ))}
-          </ul>
-        )}
-
-        {archived.length > 0 && (
-          <details className="mt-6 rounded border border-neutral-800">
-            <summary className="cursor-pointer select-none p-3 text-sm uppercase tracking-widest text-neutral-500">
-              Archived ({archived.length})
-            </summary>
-            <ul className="flex flex-col gap-2 p-3 pt-0">
-              {archived.map((season) => (
-                <SeasonRow key={season.id} season={season} muted />
-              ))}
-            </ul>
-          </details>
-        )}
       </section>
     </div>
   );

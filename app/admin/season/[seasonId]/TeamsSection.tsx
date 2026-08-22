@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { readableInk } from "@/lib/cars";
-import { usePlayers, useSeasonMembers, useTeams } from "@/lib/hooks";
+import { usePlayers, useSeason, useSeasonMembers, useTeams } from "@/lib/hooks";
 import { updateTeamConfig } from "@/lib/seasons";
 import {
   assignToTeam,
@@ -15,7 +15,7 @@ import {
   renameTeam,
   teamConfigFor,
 } from "@/lib/teams";
-import type { PlayerId, Season, TeamColor } from "@/lib/types";
+import type { PlayerId, TeamColor } from "@/lib/types";
 
 /**
  * Constructors, for one season.
@@ -26,13 +26,8 @@ import type { PlayerId, Season, TeamColor } from "@/lib/types";
  * is flagged, never blocked, because blocking the third team until the first
  * two are full is hostile during the ten minutes a league gets set up in.
  */
-export default function TeamsSection({
-  seasonId,
-  season,
-}: {
-  seasonId: string;
-  season: Season;
-}) {
+export default function TeamsSection({ seasonId }: { seasonId: string }) {
+  const { season } = useSeason(seasonId);
   const { teams } = useTeams(seasonId);
   const { members } = useSeasonMembers(seasonId);
   const players = usePlayers();
@@ -45,7 +40,9 @@ export default function TeamsSection({
   const [recolouring, setRecolouring] = useState<string | null>(null);
 
   const config = teamConfigFor(season);
-  const taken = season.teamColors ?? {};
+  // teamConfigFor already resolves an absent config; the map is read straight
+  // off the season document, which may still be streaming in.
+  const taken = season?.teamColors ?? {};
   const nameOf = (id: PlayerId) => players.get(id)?.displayName ?? id;
   const colourOf = (key: string) =>
     config.palette.find((c) => c.key === key)?.hex ?? "#666";
@@ -75,9 +72,6 @@ export default function TeamsSection({
   if (!config.enabled) {
     return (
       <section className="flex flex-col gap-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-500">
-          Teams
-        </h2>
         <p className="text-sm text-neutral-400">
           Off. Turning teams on adds a constructors table to the standings and a
           team panel to each player&rsquo;s phone.
@@ -91,7 +85,7 @@ export default function TeamsSection({
               // palette beside it.
               updateTeamConfig(
                 seasonId,
-                season.teamConfig
+                season?.teamConfig
                   ? { enabled: true }
                   : { ...DEFAULT_TEAM_CONFIG, enabled: true },
                 { source: "manual" },
@@ -109,10 +103,6 @@ export default function TeamsSection({
 
   return (
     <section className="flex flex-col gap-4">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-500">
-        Teams
-      </h2>
-
       {/* Flagged, never blocked — see the note at the top of this file. */}
       {(uneven || remainder !== 0) && teams.length > 0 && (
         <p className="rounded border border-amber-900 bg-amber-950/20 p-3 text-sm text-amber-300">

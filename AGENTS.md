@@ -503,10 +503,25 @@ it lists every race, which is what `/` wants.
 - **`/admin` is a season layer above the races.** The new-race form used to sit
   on `/admin` itself; it moved to `/admin/season/:seasonId` because a race must
   belong to a season that exists, so there is no coherent place to create one
-  outside a season. `/admin` is now the season list plus a New season form, and
-  the season page carries Races, Scoring and Settings — Roster and Teams land
-  there as further sections. `NewRaceForm` and `RaceList` take a `seasonId`
-  rather than being forked, the same reasoning as `RaceList`'s `variant`.
+  outside a season. `NewRaceForm` and `RaceList` take a `seasonId` rather than
+  being forked, the same reasoning as `RaceList`'s `variant`.
+- **The season admin's five sections are real routes**, not one stacked page and
+  not a tab component holding state: `.../:seasonId`, `/roster`, `/teams`,
+  `/scoring`, `/settings`, framed by a layout the way the player subviews are.
+  Stacked, it meant scrolling past a whole new-race form to reach the roster and
+  past the roster to reach scoring. Routes rather than state for one of the same
+  reasons the player view uses them — editing a scoring table and hitting reload
+  should land back on the scoring table, and "the teams page" should be a link.
+  The tab bar is at the **top**, unlike `PlayerTabs`: this is a laptop surface
+  read at desk distance, not a phone held at arm's length. It scrolls sideways
+  rather than wrapping, so the row stays one row at 390px.
+- **A `<button>` with no `type` inside a `<form>` is a submit button.** The
+  new-race and backfill screens put `ReorderableList` and `AddMember` inside a
+  form, where a tap on the drag handle submitted it and created the race. The
+  handle carries `type="button"` for that reason, and `AddMember` is
+  deliberately **not** a `<form>` — a form cannot contain a form, and it failed
+  hydration. Enter is wired up by hand there, which is all the element was
+  buying. Anything new that renders inside those forms has the same obligation.
 - **`/` belongs to players; `/admin` is the commissioner's.** The root page is
   a list of races — tap one, land on `/race/:id/player` — so the site root is
   the only URL anyone has to know and it never changes between game nights.
