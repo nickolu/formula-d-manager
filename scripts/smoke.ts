@@ -33,6 +33,7 @@ import {
   setDnf,
   setPositionOrder,
   startRace,
+  startRound,
   uncompleteLap,
   updateRaceSettings,
 } from "../lib/race";
@@ -184,6 +185,52 @@ async function main() {
     "the roster is locked once the race has started",
   );
 
+  console.log("\nthe between-rounds interstitial (on by default):");
+  check("new races get the pause between rounds", started.betweenRounds === true);
+  mark0 = states.length;
+  await advanceTurn(raceId, { source: "manual" }); // alpha -> bravo
+  await advanceTurn(raceId, { source: "manual" }); // bravo -> charlie
+  await advanceTurn(raceId, { source: "manual" }); // charlie -> nobody
+  const interstitial = await waitFor(states, (s) => s.phase === "betweenRounds", "the interstitial", 10_000, mark0);
+  check("the round ends on nobody's turn", interstitial.currentPlayerId === null, `${interstitial.currentPlayerId}`);
+  check("the interstitial is paused", readTimer(interstitial, Date.now()).isPaused);
+  check("the round still rolled over", interstitial.currentRound === 2, `round ${interstitial.currentRound}`);
+  check("the next round's order is already snapshotted", interstitial.roundOrder.join(",") === "alpha,bravo,charlie");
+
+  mark0 = states.length;
+  await rewindTurn(raceId, { source: "manual" });
+  const backIn = await waitFor(states, (s) => s.phase === "turn", "back into round 1", 10_000, mark0);
+  check("rewinding out of the interstitial goes back a round", backIn.currentRound === 1, `round ${backIn.currentRound}`);
+  check("...and lands on that round's last car", backIn.currentPlayerId === "charlie");
+
+  mark0 = states.length;
+  await advanceTurn(raceId, { source: "manual" });
+  await waitFor(states, (s) => s.phase === "betweenRounds", "the interstitial again", 10_000, mark0);
+  mark0 = states.length;
+  await startRound(raceId, { source: "manual" });
+  const rolled = await waitFor(states, (s) => s.phase === "turn", "round 2 running", 10_000, mark0);
+  check("starting the round selects the leader", rolled.currentPlayerId === "alpha", `${rolled.currentPlayerId}`);
+  check("starting the round anchors a fresh clock", !readTimer(rolled, Date.now()).isPaused && rolled.turnDurationMs === TURN_MS, `${rolled.turnDurationMs}`);
+  await rejects(
+    () => startRound(raceId, { source: "manual" }),
+    "starting a round that is already running is refused",
+  );
+
+  // Turned off for the rest of the run: everything below was written against
+  // the instantaneous rollover, which is exactly the behaviour being asserted.
+  mark0 = states.length;
+  await updateRaceSettings(raceId, { settings: { betweenRounds: false } }, { source: "manual" });
+  await waitFor(states, (s) => s.betweenRounds === false, "interstitial off", 10_000, mark0);
+  check("the toggle is mirrored onto the live doc", true);
+
+  // Back to the top of round 1 so the turn-order assertions below start from
+  // the state they were written for.
+  await rewindTurn(raceId, { source: "manual" }); // alpha -> charlie, round 1
+  await rewindTurn(raceId, { source: "manual" }); // charlie -> bravo
+  await rewindTurn(raceId, { source: "manual" }); // bravo -> alpha
+  const rewound0 = await waitFor(states, (s) => s.currentPlayerId === "alpha" && s.currentRound === 1, "back at the start");
+  check("the race is back at the top of round 1", rewound0.roundOrder.join(",") === "alpha,bravo,charlie", rewound0.roundOrder.join(","));
+
   console.log("\nturns within a round:");
   await advanceTurn(raceId, { source: "manual" });
   const s1 = await waitFor(states, (s) => s.currentPlayerId === "bravo", "bravo");
@@ -253,12 +300,19 @@ async function main() {
   const events = await getDocs(collection(db, "races", raceId, "events"));
   const types = events.docs.map((d) => d.data().type as string);
   check("race creation seeded the log", types.includes("raceCreated"));
-  check("roundStarted logged once", types.filter((t) => t === "roundStarted").length === 1, `${types.filter((t) => t === "roundStarted").length}`);
+  // Two rounds have begun by now: one from startRound leaving the interstitial,
+  // one from the inline rollover after the toggle was turned off.
+  check("roundStarted logged per round begun", types.filter((t) => t === "roundStarted").length === 2, `${types.filter((t) => t === "roundStarted").length}`);
+  // Two rounds ended into the interstitial; the inline rollover ends none.
+  check("roundEnded logged only for the interstitial", types.filter((t) => t === "roundEnded").length === 2, `${types.filter((t) => t === "roundEnded").length}`);
   check("overtake logged", types.includes("positionOrderChanged"));
   check("lapCompleted logged 3x", types.filter((t) => t === "lapCompleted").length === 3);
-  check("turnAdvanced logged 3x", types.filter((t) => t === "turnAdvanced").length === 3, `${types.filter((t) => t === "turnAdvanced").length}`);
+  // Five advances have landed on a car; the two that ended a round into the
+  // interstitial landed on nobody and logged roundEnded instead.
+  check("turnAdvanced logged per car that got the turn", types.filter((t) => t === "turnAdvanced").length === 5, `${types.filter((t) => t === "turnAdvanced").length}`);
   check("all events carry a source", events.docs.every((d) => !!d.data().source));
   check("the flag drop is logged", types.includes("raceStarted"));
+  check("the end of a round is logged", types.includes("roundEnded"));
   check("the removal is logged", types.includes("playerRemoved"));
   check(
     "a settings change logs only what changed",
@@ -436,7 +490,7 @@ async function main() {
   );
   check(
     "every rewind is logged",
-    finalTypes.filter((t) => t === "turnRewound").length === 5,
+    finalTypes.filter((t) => t === "turnRewound").length === 9,
     `${finalTypes.filter((t) => t === "turnRewound").length}`,
   );
   check(

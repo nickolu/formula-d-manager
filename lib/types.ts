@@ -137,6 +137,23 @@ export interface LiveState {
   positionOrder: PlayerId[];
   roundOrder: PlayerId[];
   /**
+   * Which half of the loop the race is in. Absent means "turn", so races that
+   * predate the between-rounds interstitial behave exactly as they did.
+   *
+   * "betweenRounds" is nobody's turn on purpose: every car has moved, the next
+   * round's order has been snapshotted, and the table is looking at it before
+   * the clock starts again.
+   */
+  phase?: "turn" | "betweenRounds";
+  /**
+   * Mirror of races/{id}.settings.betweenRounds, kept here so advanceTurn can
+   * read the toggle from the document it already has. Same denormalization
+   * bargain as `retired` below: the race doc stays the place it is edited,
+   * updateRaceSettings writes both in one transaction, and the hot path keeps
+   * costing one read.
+   */
+  betweenRounds?: boolean;
+  /**
    * Cars that have retired. Mirrored onto participants/{id}.dnf, but kept here
    * too so advanceTurn can skip them from a single document read rather than
    * fanning out over participants — and so every open listener gets the state
@@ -187,11 +204,26 @@ export interface TurnAdvancedEvent extends BaseEvent {
   round: number;
 }
 
-/** Emitted when the order wraps and a fresh snapshot of standings is taken. */
+/**
+ * Emitted when a round actually begins — the clock starts and the leader is up.
+ * With the between-rounds interstitial on, that is a separate moment from the
+ * previous round ending, which is why roundEnded exists.
+ */
 export interface RoundStartedEvent extends BaseEvent {
   type: "roundStarted";
   round: number;
   order: PlayerId[];
+}
+
+/**
+ * Every car has moved and the race has stopped on nobody's turn so the table
+ * can confirm the order. Only ever emitted when the interstitial is on —
+ * without it, a round ends and the next begins in the same instant.
+ */
+export interface RoundEndedEvent extends BaseEvent {
+  type: "roundEnded";
+  /** The round that just finished. */
+  round: number;
 }
 
 /** An overtake: standings changed, taking effect from the next round. */
@@ -291,6 +323,7 @@ export type RaceEvent =
   | PlayerRemovedEvent
   | TurnAdvancedEvent
   | RoundStartedEvent
+  | RoundEndedEvent
   | PositionOrderChangedEvent
   | LapCompletedEvent
   | DnfChangedEvent

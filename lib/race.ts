@@ -80,6 +80,7 @@ export async function startRace(raceId: string, who: Actor) {
 
     tx.update(raceDoc(raceId), { status: "live" });
     tx.update(liveDoc(raceId), {
+      phase: "turn",
       currentPlayerId: live.positionOrder[0],
       roundOrder: live.positionOrder,
       currentRound: 1,
@@ -156,6 +157,17 @@ export async function updateRaceSettings(
 
     if (Object.keys(raceFields).length > 0) {
       tx.update(raceDoc(raceId), raceFields);
+    }
+
+    // Mirrored so advanceTurn can read the toggle from the live doc it already
+    // has, in the same transaction that edits the race doc — the two cannot
+    // disagree.
+    const liveFields: Record<string, unknown> = {};
+    if (patch.settings?.betweenRounds !== undefined) {
+      liveFields.betweenRounds = patch.settings.betweenRounds;
+    }
+    if (Object.keys(liveFields).length > 0) {
+      tx.update(liveDoc(raceId), { ...liveFields, updatedAt: serverTimestamp() });
     }
 
     if (patch.turnSeconds !== undefined) {
@@ -272,6 +284,27 @@ export async function advanceTurn(raceId: string, who: Actor) {
     // Without this the loop would either spin or park the turn on nobody.
     if (nextIndex === -1) throw new Error("Every car has retired");
 
+    // Every car has moved and the table wants to look at the order before the
+    // clock starts again. Stop on nobody's turn: the snapshot and the round
+    // increment still happen here, only the selection waits for startRound.
+    if (roundOver && live.betweenRounds) {
+      tx.update(liveDoc(raceId), {
+        phase: "betweenRounds",
+        currentPlayerId: null,
+        turnStartedAt: null,
+        turnDurationMs: live.turnDurationDefaultMs ?? live.turnDurationMs,
+        currentRound: nextRound,
+        roundOrder: nextOrder,
+        previousRoundOrder: live.roundOrder,
+        updatedAt: serverTimestamp(),
+      });
+      appendEvent(tx, raceId, who, {
+        type: "roundEnded",
+        round: live.currentRound,
+      });
+      return;
+    }
+
     tx.update(liveDoc(raceId), {
       currentPlayerId: nextOrder[nextIndex],
       turnStartedAt: serverTimestamp(),
@@ -296,6 +329,39 @@ export async function advanceTurn(raceId: string, who: Actor) {
       fromPlayerId: live.currentPlayerId,
       toPlayerId: nextOrder[nextIndex],
       round: nextRound,
+    });
+  });
+}
+
+/**
+ * Leaves the between-rounds interstitial: the leader is up and the clock runs.
+ *
+ * roundStarted is emitted from here rather than from advanceTurn's rollover so
+ * that it marks the round actually beginning rather than the previous one
+ * ending — which, with the interstitial on, are minutes apart. With it off,
+ * advanceTurn still emits it inline and the two moments are the same instant.
+ */
+export async function startRound(raceId: string, who: Actor) {
+  await runTransaction(db, async (tx) => {
+    const live = await readLive(tx, raceId);
+    if (live.phase !== "betweenRounds") throw new Error("Not between rounds");
+
+    const retired = new Set(live.retired ?? []);
+    const first = nextRunner(live.roundOrder, retired, 0, 1);
+    if (first === -1) throw new Error("Every car has retired");
+
+    tx.update(liveDoc(raceId), {
+      phase: "turn",
+      currentPlayerId: live.roundOrder[first],
+      turnStartedAt: serverTimestamp(),
+      turnDurationMs: live.turnDurationDefaultMs ?? live.turnDurationMs,
+      updatedAt: serverTimestamp(),
+    });
+
+    appendEvent(tx, raceId, who, {
+      type: "roundStarted",
+      round: live.currentRound,
+      order: live.roundOrder,
     });
   });
 }
@@ -328,7 +394,14 @@ export async function rewindTurn(raceId: string, who: Actor) {
       ? live.roundOrder.indexOf(live.currentPlayerId)
       : live.roundOrder.length;
 
-    const withinRound = nextRunner(live.roundOrder, retired, index - 1, -1);
+    // In the interstitial roundOrder is already the NEXT round's snapshot and
+    // nobody has moved in it, so stepping back within it would be meaningless.
+    // Fall straight through to the cross-a-boundary branch, which is exactly
+    // the move that is wanted.
+    const withinRound =
+      live.phase === "betweenRounds"
+        ? -1
+        : nextRunner(live.roundOrder, retired, index - 1, -1);
 
     if (withinRound !== -1) {
       const target = live.roundOrder[withinRound];
@@ -357,6 +430,7 @@ export async function rewindTurn(raceId: string, who: Actor) {
     if (lastIndex === -1) throw new Error("Every car has retired");
 
     tx.update(liveDoc(raceId), {
+      phase: "turn",
       currentPlayerId: previous[lastIndex],
       turnStartedAt: null,
       turnDurationMs: live.turnDurationDefaultMs ?? live.turnDurationMs,

@@ -36,6 +36,20 @@ the clock, and appends `roundStarted`.
 actually beginning, not the moment the previous one ended. When the feature is
 off, `advanceTurn` keeps emitting it inline as it does today.
 
+## Decided while building (spec updated)
+
+- **`advanceTurn` reads the toggle from the live doc, not the race doc.** A
+  `betweenRounds` mirror was added to `LiveState`, written by `createRace` and
+  `updateRaceSettings` in the same transaction that writes the race doc. Reading
+  `races/{id}.settings` in `advanceTurn` would add a document read to the hot
+  path — once per turn, per race — and the same denormalization bargain already
+  covers `retired` and `result`.
+- **Entering the interstitial appends a new `roundEnded` event.** With
+  `roundStarted` moved to `startRound`, a rollover into the interstitial would
+  otherwise append nothing at all, and the log would have no record that anyone
+  tapped Next turn. `roundEnded` carries the round that finished, and is emitted
+  only when the interstitial is on.
+
 ## Distinguishing this from a finished race
 
 `finishRace` also sets `currentPlayerId: null`. Every view that asks "is it

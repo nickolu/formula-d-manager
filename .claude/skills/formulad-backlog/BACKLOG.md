@@ -18,7 +18,7 @@ fields exist.
 | 4 | 3 | Player view IA + history subview | **done** | 2 |
 | 5 | 4 | Go back a turn (reset + auto-pause) | **done** | — |
 | 6 | 6 | Race settings view | **done** | 3, 4 |
-| 7 | 7 | Between-rounds pause step | todo | 6 |
+| 7 | 7 | Between-rounds pause step | **done** | 6 |
 | 8 | 9 | Delete a race | todo | 6 |
 | 9 | 8 | Notes in results | todo | 5 |
 | 10 | 10 | My Racer identity | todo | 3 |

@@ -17,6 +17,7 @@ import {
   setDnf,
   setPositionOrder,
   startRace,
+  startRound,
 } from "@/lib/race";
 import { formatRemaining, readTimer } from "@/lib/timer";
 import ReorderableList from "@/app/ReorderableList";
@@ -147,6 +148,172 @@ export default function PlayerView({ raceId }: { raceId: string }) {
     return run(() => setPositionOrder(raceId, next, { source: "manual" }));
   }
 
+  // Rendered in both the running-turn view and the between-rounds
+  // interstitial — the order is exactly what the table is checking there.
+  const standings = (
+    <section>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="text-xs uppercase tracking-widest text-neutral-500">
+          Standings — drag to reorder when someone overtakes
+        </h2>
+        {/* Both modes are the same data and the same mutation; this only
+            changes how it is drawn. */}
+        <div className="flex shrink-0 overflow-hidden rounded-full border border-neutral-700 text-xs">
+          {(["list", "track"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => writeMode(m)}
+              aria-pressed={mode === m}
+              className={`px-3 py-1.5 capitalize ${
+                mode === m
+                  ? "bg-neutral-700 text-white"
+                  : "text-neutral-400"
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {mode === "track" ? (
+        <TrackView
+          live={live}
+          players={players}
+          participants={participants}
+          disabled={busy}
+          onReorder={(next) =>
+            run(() => setPositionOrder(raceId, next, { source: "manual" }))
+          }
+          onCompleteLap={(id) =>
+            run(() => completeLap(raceId, id, { source: "manual" }))
+          }
+          onToggleDnf={(id, dnf) =>
+            run(() => setDnf(raceId, id, dnf, { source: "manual" }))
+          }
+        />
+      ) : (
+      <ReorderableList
+        items={live.positionOrder}
+        disabled={busy}
+        onReorder={(next) =>
+          run(() => setPositionOrder(raceId, next, { source: "manual" }))
+        }
+        renderRow={(id, i) => {
+          const roundIdx = live.roundOrder.indexOf(id);
+          const alreadyMoved = roundIdx !== -1 && roundIdx < turnIndex;
+          const laps = participants.get(id)?.lapsCompleted ?? 0;
+          const isOut = retired.has(id);
+
+          return (
+            <div
+              className={`flex items-center gap-2 rounded border p-2 ${
+                id === live.currentPlayerId
+                  ? "border-emerald-600 bg-emerald-950/40"
+                  : "border-neutral-800"
+              }`}
+            >
+              <span className="w-5 text-neutral-500">{i + 1}</span>
+              <span
+                className={`flex-1 ${
+                  isOut
+                    ? "text-neutral-600 line-through"
+                    : alreadyMoved
+                      ? "text-neutral-500"
+                      : ""
+                }`}
+              >
+                {nameOf(id)}
+              </span>
+              <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-400">
+                lap {laps}
+              </span>
+              <button
+                onClick={() =>
+                  run(() => completeLap(raceId, id, { source: "manual" }))
+                }
+                disabled={busy || isOut}
+                className="rounded border border-neutral-700 px-2 py-1 text-xs disabled:opacity-30"
+              >
+                +lap
+              </button>
+              <button
+                onClick={() =>
+                  run(() => setDnf(raceId, id, !isOut, { source: "manual" }))
+                }
+                disabled={busy}
+                className={`rounded border px-2 py-1 text-xs disabled:opacity-30 ${
+                  isOut
+                    ? "border-red-800 bg-red-950/50 text-red-400"
+                    : "border-neutral-700 text-neutral-400"
+                }`}
+              >
+                DNF
+              </button>
+              <button
+                onClick={() => swap(i, -1)}
+                disabled={busy || i === 0}
+                className="rounded border border-neutral-700 px-3 py-1 disabled:opacity-30"
+              >
+                ↑
+              </button>
+              <button
+                onClick={() => swap(i, 1)}
+                disabled={busy || i === live.positionOrder.length - 1}
+                className="rounded border border-neutral-700 px-3 py-1 disabled:opacity-30"
+              >
+                ↓
+              </button>
+            </div>
+          );
+        }}
+      />
+      )}
+    </section>
+  );
+
+  // Nobody's turn means two different things: the race is over, or it is
+  // between rounds. Discriminate on status, never on the null player.
+  const finished = race?.status === "complete";
+  const between = !finished && live.phase === "betweenRounds";
+
+  if (between) {
+    return (
+      <main className="flex flex-col gap-4 p-4">
+        <div className="text-center">
+          <p className="text-xs uppercase tracking-widest text-neutral-500">
+            Round {live.currentRound - 1} done
+          </p>
+          <p className="mt-1 text-3xl font-semibold">Check the order</p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Drag anyone who is out of place, then start the round.
+          </p>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => run(() => rewindTurn(raceId, { source: "manual" }))}
+            disabled={busy}
+            className="rounded-3xl border border-neutral-700 px-5 text-lg text-neutral-400 active:bg-neutral-800 disabled:opacity-30"
+          >
+            ↩ Back
+          </button>
+          <button
+            onClick={() => run(() => startRound(raceId, { source: "manual" }))}
+            disabled={busy}
+            className="flex-1 rounded-3xl bg-emerald-600 py-8 text-3xl font-bold active:bg-emerald-700 disabled:opacity-50"
+          >
+            Start round {live.currentRound}
+          </button>
+        </div>
+
+        {standings}
+
+        {actionError && <p className="text-center text-red-500">{actionError}</p>}
+      </main>
+    );
+  }
+
   return (
     <main className="flex flex-col gap-4 p-4">
       <div className="flex items-baseline justify-between text-neutral-400">
@@ -190,125 +357,7 @@ export default function PlayerView({ raceId }: { raceId: string }) {
         </button>
       </div>
 
-      <section>
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-500">
-            Standings — drag to reorder when someone overtakes
-          </h2>
-          {/* Both modes are the same data and the same mutation; this only
-              changes how it is drawn. */}
-          <div className="flex shrink-0 overflow-hidden rounded-full border border-neutral-700 text-xs">
-            {(["list", "track"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => writeMode(m)}
-                aria-pressed={mode === m}
-                className={`px-3 py-1.5 capitalize ${
-                  mode === m
-                    ? "bg-neutral-700 text-white"
-                    : "text-neutral-400"
-                }`}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {mode === "track" ? (
-          <TrackView
-            live={live}
-            players={players}
-            participants={participants}
-            disabled={busy}
-            onReorder={(next) =>
-              run(() => setPositionOrder(raceId, next, { source: "manual" }))
-            }
-            onCompleteLap={(id) =>
-              run(() => completeLap(raceId, id, { source: "manual" }))
-            }
-            onToggleDnf={(id, dnf) =>
-              run(() => setDnf(raceId, id, dnf, { source: "manual" }))
-            }
-          />
-        ) : (
-        <ReorderableList
-          items={live.positionOrder}
-          disabled={busy}
-          onReorder={(next) =>
-            run(() => setPositionOrder(raceId, next, { source: "manual" }))
-          }
-          renderRow={(id, i) => {
-            const roundIdx = live.roundOrder.indexOf(id);
-            const alreadyMoved = roundIdx !== -1 && roundIdx < turnIndex;
-            const laps = participants.get(id)?.lapsCompleted ?? 0;
-            const isOut = retired.has(id);
-
-            return (
-              <div
-                className={`flex items-center gap-2 rounded border p-2 ${
-                  id === live.currentPlayerId
-                    ? "border-emerald-600 bg-emerald-950/40"
-                    : "border-neutral-800"
-                }`}
-              >
-                <span className="w-5 text-neutral-500">{i + 1}</span>
-                <span
-                  className={`flex-1 ${
-                    isOut
-                      ? "text-neutral-600 line-through"
-                      : alreadyMoved
-                        ? "text-neutral-500"
-                        : ""
-                  }`}
-                >
-                  {nameOf(id)}
-                </span>
-                <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-400">
-                  lap {laps}
-                </span>
-                <button
-                  onClick={() =>
-                    run(() => completeLap(raceId, id, { source: "manual" }))
-                  }
-                  disabled={busy || isOut}
-                  className="rounded border border-neutral-700 px-2 py-1 text-xs disabled:opacity-30"
-                >
-                  +lap
-                </button>
-                <button
-                  onClick={() =>
-                    run(() => setDnf(raceId, id, !isOut, { source: "manual" }))
-                  }
-                  disabled={busy}
-                  className={`rounded border px-2 py-1 text-xs disabled:opacity-30 ${
-                    isOut
-                      ? "border-red-800 bg-red-950/50 text-red-400"
-                      : "border-neutral-700 text-neutral-400"
-                  }`}
-                >
-                  DNF
-                </button>
-                <button
-                  onClick={() => swap(i, -1)}
-                  disabled={busy || i === 0}
-                  className="rounded border border-neutral-700 px-3 py-1 disabled:opacity-30"
-                >
-                  ↑
-                </button>
-                <button
-                  onClick={() => swap(i, 1)}
-                  disabled={busy || i === live.positionOrder.length - 1}
-                  className="rounded border border-neutral-700 px-3 py-1 disabled:opacity-30"
-                >
-                  ↓
-                </button>
-              </div>
-            );
-          }}
-        />
-        )}
-      </section>
+      {standings}
 
       <button
         onClick={() =>

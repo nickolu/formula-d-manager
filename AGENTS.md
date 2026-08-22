@@ -193,6 +193,22 @@ it already exists so it can never clobber a scoring table tuned in the console.
   refuses afterwards, because mid-race it would have to unpick three ordered
   lists *and* re-anchor a round already in progress. Retiring a car is the
   in-race answer, and it is reversible.
+- **The between-rounds interstitial.** With `settings.betweenRounds` on (the
+  default for new races; absent means off, so old races are untouched), a
+  rollover stops on nobody's turn: `phase: "betweenRounds"`,
+  `currentPlayerId: null`, clock paused with a full duration. The round still
+  increments and `roundOrder` is still snapshotted there — only the *selection*
+  waits. `startRound` leaves the interstitial and is where `roundStarted` is
+  emitted, so that event marks the round actually beginning rather than the
+  previous one ending; with the toggle off those are the same instant and
+  `advanceTurn` emits it inline as before. Entering the interstitial appends
+  `roundEnded`, because the operator did tap Next turn and the log must say so.
+  `rewindTurn` treats the interstitial as a boundary crossing and reuses that
+  branch — in the interstitial `roundOrder` is already the *next* round's
+  snapshot, so stepping back within it would be meaningless.
+- **Nobody's turn means two different things** — the race is over, or it is
+  between rounds. Every view discriminates on `race.status === "complete"`,
+  never on the null `currentPlayerId`. `finishRace` nulls it too.
 - **`advanceTurn` deliberately does not check the race status.** It is the hot
   path — once per turn, per race — and adding a race-doc read would double its
   cost to guard against something no screen offers.
@@ -258,7 +274,7 @@ it already exists so it can never clobber a scoring table tuned in the console.
 ## Verification
 
 ```bash
-npm run smoke         # 85 end-to-end checks against the real project
+npm run smoke         # 99 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 
@@ -299,6 +315,8 @@ nudging, per-car laps, manual correction.
   - **Done:** rewinding a turn now resets the clock and leaves it paused.
   - **Done:** the player view is a route with subviews and a bottom tab bar,
     and the first subview is history — the event log read back as sentences.
+  - **Done:** a between-rounds pause — the table confirms the order before the
+    next round's clock starts. On by default, switchable in race settings.
   - **Done:** a race settings subview, and `scheduled` given real meaning —
     races start unstarted, the grid is editable until Start race drops the
     flag, and the roster locks after that.

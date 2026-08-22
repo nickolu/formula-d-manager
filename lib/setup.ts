@@ -44,6 +44,10 @@ export async function createRace(input: NewRaceInput): Promise<string> {
     // stopped until someone explicitly taps Start race.
     status: "scheduled",
     lapCount: input.lapCount,
+    // On for new races, off for races that predate the field. Silently
+    // changing the flow of a race already in progress is worse than an old
+    // race not getting a new feature.
+    settings: { betweenRounds: true },
   });
 
   batch.set(doc(db, "races", raceRef.id, "state", "live"), {
@@ -55,6 +59,10 @@ export async function createRace(input: NewRaceInput): Promise<string> {
     turnDurationMs: input.turnSeconds * 1000,
     turnDurationDefaultMs: input.turnSeconds * 1000,
     currentRound: 1,
+    phase: "turn",
+    // Mirror of settings.betweenRounds, so advanceTurn reads the toggle from
+    // the document it already has.
+    betweenRounds: true,
     // The starting grid is both the opening standings and the first round's
     // frozen order; they diverge as soon as anyone overtakes.
     positionOrder: ids,

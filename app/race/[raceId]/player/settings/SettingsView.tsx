@@ -128,6 +128,28 @@ export default function SettingsView({ raceId }: { raceId: string }) {
 
       <section>
         <h2 className="mb-2 text-xs uppercase tracking-widest text-neutral-500">
+          During the race
+        </h2>
+        <Toggle
+          label="Pause between rounds"
+          hint="After every car has moved, stop on nobody's turn so the table can check the order before the next round starts."
+          // Absent means off, which is how races predating the toggle behave.
+          value={race.settings?.betweenRounds ?? false}
+          disabled={busy}
+          onChange={(next) =>
+            run(next ? "Between-rounds pause on" : "Between-rounds pause off", () =>
+              updateRaceSettings(
+                raceId,
+                { settings: { betweenRounds: next } },
+                { source: "manual" },
+              ),
+            )
+          }
+        />
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-xs uppercase tracking-widest text-neutral-500">
           Grid
         </h2>
 
@@ -190,6 +212,45 @@ export default function SettingsView({ raceId }: { raceId: string }) {
 
       {status && <p className="text-center text-sm text-neutral-400">{status}</p>}
     </main>
+  );
+}
+
+function Toggle({
+  label,
+  hint,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  hint: string;
+  value: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={() => onChange(!value)}
+      disabled={disabled}
+      aria-pressed={value}
+      className={`flex w-full items-start gap-3 rounded-2xl border p-4 text-left disabled:opacity-50 ${
+        value ? "border-emerald-800 bg-emerald-950/30" : "border-neutral-800"
+      }`}
+    >
+      <span
+        className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded border text-xs ${
+          value
+            ? "border-emerald-600 bg-emerald-600 text-white"
+            : "border-neutral-700 text-transparent"
+        }`}
+      >
+        ✓
+      </span>
+      <span>
+        <span className="block">{label}</span>
+        <span className="mt-1 block text-xs text-neutral-500">{hint}</span>
+      </span>
+    </button>
   );
 }
 

@@ -163,6 +163,8 @@ function describe(event: RaceEvent, nameOf: (id: PlayerId) => string): string {
       return `${nameOf(event.toPlayerId)} is up (round ${event.round}).`;
     case "roundStarted":
       return `Round ${event.round} began — order: ${list(event.order)}.`;
+    case "roundEnded":
+      return `Round ${event.round} ended — every car has moved.`;
     case "positionOrderChanged":
       return `Standings changed to ${list(event.order)}.`;
     case "lapCompleted":
