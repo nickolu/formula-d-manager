@@ -6,9 +6,10 @@ import {
   useLiveState,
   useParticipants,
   usePlayers,
+  useRace,
   useUid,
 } from "@/lib/hooks";
-import { claimRacer, joinRace, releaseRacer } from "@/lib/race";
+import { claimRacer, joinRace, releaseRacer, setCarStatus } from "@/lib/race";
 import type { PlayerId } from "@/lib/types";
 import RacerOverview from "./RacerOverview";
 
@@ -23,6 +24,7 @@ import RacerOverview from "./RacerOverview";
 export default function MyRacerView({ raceId }: { raceId: string }) {
   const uid = useUid();
   const { live } = useLiveState(raceId);
+  const { race } = useRace(raceId);
   const participants = useParticipants(raceId);
   const players = usePlayers();
 
@@ -33,12 +35,12 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
   const [previewing, setPreviewing] = useState<PlayerId | null>(null);
   const [joinName, setJoinName] = useState("");
 
-  async function run(action: () => Promise<void>) {
+  async function run(action: () => Promise<void>, dismiss = true) {
     setBusy(true);
     setError(null);
     try {
       await action();
-      setPreviewing(null);
+      if (dismiss) setPreviewing(null);
     } catch (e) {
       // A contested claim lands here. Say what happened — the list is already
       // streaming, so it has re-rendered with the truth by the time it is read.
@@ -60,6 +62,10 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
     ? order.find((id) => participants.get(id)?.claimedBy === uid)
     : undefined;
 
+  // Absent or disabled means no card at all — old races are untouched.
+  const carStatus = race?.settings?.carStatus;
+  const carStatusSpec = carStatus?.enabled ? carStatus.spec : undefined;
+
   const overviewFor = (id: PlayerId) => (
     <RacerOverview
       name={nameOf(id)}
@@ -67,6 +73,16 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
       participant={participants.get(id)}
       retired={retired.has(id)}
       position={order.indexOf(id) + 1}
+      carStatusSpec={carStatusSpec}
+      busy={busy}
+      // Anyone can change anyone's card, the same way anyone can reach across
+      // the table. The claim decides whose shows up top, nothing more.
+      onSetCarStatus={(key, value) =>
+        run(
+          () => setCarStatus(raceId, id, key, value, { source: "manual" }),
+          false,
+        )
+      }
     />
   );
 

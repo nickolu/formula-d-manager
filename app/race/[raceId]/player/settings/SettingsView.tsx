@@ -138,22 +138,41 @@ export default function SettingsView({ raceId }: { raceId: string }) {
         <h2 className="mb-2 text-xs uppercase tracking-widest text-neutral-500">
           During the race
         </h2>
-        <Toggle
-          label="Pause between rounds"
-          hint="After every car has moved, stop on nobody's turn so the table can check the order before the next round starts."
-          // Absent means off, which is how races predating the toggle behave.
-          value={race.settings?.betweenRounds ?? false}
-          disabled={busy}
-          onChange={(next) =>
-            run(next ? "Between-rounds pause on" : "Between-rounds pause off", () =>
-              updateRaceSettings(
-                raceId,
-                { settings: { betweenRounds: next } },
-                { source: "manual" },
-              ),
-            )
-          }
-        />
+        <div className="flex flex-col gap-2">
+          <Toggle
+            label="Pause between rounds"
+            hint="After every car has moved, stop on nobody's turn so the table can check the order before the next round starts."
+            // Absent means off, which is how races predating the toggle behave.
+            value={race.settings?.betweenRounds ?? false}
+            disabled={busy}
+            onChange={(next) =>
+              run(next ? "Between-rounds pause on" : "Between-rounds pause off", () =>
+                updateRaceSettings(
+                  raceId,
+                  { settings: { betweenRounds: next } },
+                  { source: "manual" },
+                ),
+              )
+            }
+          />
+          <Toggle
+            label="Car status card"
+            hint="Track tires, brakes, gearbox, engine, body and nitro on each car — a stand-in for the cardboard card. It shows up under My racer."
+            value={race.settings?.carStatus?.enabled ?? false}
+            disabled={busy}
+            onChange={(next) =>
+              run(next ? "Car status on" : "Car status off", () =>
+                updateRaceSettings(
+                  raceId,
+                  // Only `enabled` is sent: updateRaceSettings writes nested
+                  // settings by dot path, so the spec beside it is left alone.
+                  { settings: { carStatus: { enabled: next } } },
+                  { source: "manual" },
+                ),
+              )
+            }
+          />
+        </div>
       </section>
 
       <section>

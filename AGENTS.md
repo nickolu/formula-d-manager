@@ -72,6 +72,21 @@ The app does **not** model the board: no car positions, no gear, no wear tokens.
 Humans nudge the standings when an overtake happens. Adding board state was
 explicitly rejected — it re-implements the game and can desync from the table.
 
+**The car status card is not a reversal of that.** `Participant.carStatus` is a
+shared counter standing in for a piece of cardboard, the way the standings list
+stands in for looking at the table. The distinction that keeps it honest: the
+app never *derives* anything from those numbers and never enforces a rule with
+them, so nothing can desync. **Keep it that way** — the moment something
+validates a move against remaining tires, this becomes a board model and the
+rejection above applies. It is off by default, and its maxima live in
+`races/{id}.settings.carStatus.spec` in Firestore rather than in code, following
+the `scoringConfig` precedent: house variants must not need a deploy. A key
+absent from a participant's `carStatus` means *full* — nothing is backfilled.
+`setCarStatus` clamps to `0..max` and refuses an unknown key **in `lib/race.ts`**,
+not only in the UI, because every caller — the Phase 3 chatbot included — has to
+hit the same limit. There are deliberately no permissions: anyone can change
+anyone's card, exactly as anyone can reach across the table and move your pegs.
+
 **Retirement is live state, not a finishing attribute.** A car that breaks on
 lap 1 stops taking turns immediately, so `setDnf` writes `participants/{id}.dnf`
 *and* a cached `retired` list on the live doc, in one transaction. The list is
@@ -314,7 +329,7 @@ it already exists so it can never clobber a scoring table tuned in the console.
 ## Verification
 
 ```bash
-npm run smoke         # 129 end-to-end checks against the real project
+npm run smoke         # 137 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 
@@ -355,6 +370,8 @@ nudging, per-car laps, manual correction.
   - **Done:** rewinding a turn now resets the clock and leaves it paused.
   - **Done:** the player view is a route with subviews and a bottom tab bar,
     and the first subview is history — the event log read back as sentences.
+  - **Done:** the car status card — tires, brakes, gearbox, engine, body, nitro
+    as pegs under My racer. Off by default, spec configurable in Firestore.
   - **Done:** My Racer — a player claims their car on their own phone, and the
     claim is shared state so two people can't pick the same one. A player who
     isn't on the grid can put their own name in from the same screen.
@@ -366,8 +383,8 @@ nudging, per-car laps, manual correction.
   - **Done:** a race settings subview, and `scheduled` given real meaning —
     races start unstarted, the grid is editable until Start race drops the
     flag, and the roster locks after that.
-  - **Next:** race history and player pages (both are views over the same
-    `result` data), then post-game review to confirm the finishing order before
+  - **Next:** season-level player pages (a view over the same `result` data
+    across races), then post-game review to confirm the finishing order before
     a race is sealed.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
     rules tighten — right now any signed-in caller can write anything, which

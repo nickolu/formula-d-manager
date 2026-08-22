@@ -1,7 +1,8 @@
 "use client";
 
 import { readableInk, type Car } from "@/lib/cars";
-import type { Participant } from "@/lib/types";
+import type { CarStatusProperty, Participant } from "@/lib/types";
+import CarStatusCard from "./CarStatusCard";
 
 /**
  * One racer, read back in full: who they are, where they started, how far they
@@ -16,6 +17,9 @@ export default function RacerOverview({
   participant,
   retired,
   position,
+  carStatusSpec,
+  onSetCarStatus,
+  busy = false,
 }: {
   name: string;
   car?: Car;
@@ -23,6 +27,10 @@ export default function RacerOverview({
   retired: boolean;
   /** Live standings position, 1-based. */
   position: number;
+  /** Absent when the race has car status switched off. */
+  carStatusSpec?: CarStatusProperty[];
+  onSetCarStatus?: (key: string, value: number) => void;
+  busy?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-4">
@@ -50,6 +58,20 @@ export default function RacerOverview({
         <Stat label="Started" value={String(participant?.startPosition ?? "—")} />
         <Stat label="Laps" value={String(participant?.lapsCompleted ?? 0)} />
       </dl>
+
+      {carStatusSpec && carStatusSpec.length > 0 && onSetCarStatus && (
+        <div className="rounded-xl border border-neutral-800 p-3">
+          <p className="mb-3 text-xs uppercase tracking-widest text-neutral-500">
+            Car
+          </p>
+          <CarStatusCard
+            spec={carStatusSpec}
+            values={participant?.carStatus}
+            onSet={onSetCarStatus}
+            disabled={busy}
+          />
+        </div>
+      )}
 
       {participant?.note && (
         <div className="rounded-xl border border-neutral-800 p-3">

@@ -17,7 +17,7 @@ import type {
   Participant,
   PlayerId,
   Race,
-  RaceSettings,
+  RaceSettingsPatchShape,
 } from "./types";
 
 export const raceDoc = (raceId: string) => doc(db, "races", raceId);
@@ -109,7 +109,7 @@ export interface RaceSettingsPatch {
   lapCount?: number;
   /** Written to turnDurationDefaultMs; takes effect on the next turn. */
   turnSeconds?: number;
-  settings?: RaceSettings;
+  settings?: RaceSettingsPatchShape;
 }
 
 /**
@@ -152,10 +152,21 @@ export async function updateRaceSettings(
     }
     if (patch.settings !== undefined) {
       // Dot paths rather than a nested object: writing `settings` whole would
-      // silently clear whichever toggle this caller didn't mention.
-      for (const [key, value] of Object.entries(patch.settings)) {
-        if (value !== undefined) raceFields[`settings.${key}`] = value;
-      }
+      // silently clear whichever toggle this caller didn't mention. Nested
+      // plain objects flatten too, so switching carStatus on cannot wipe the
+      // spec sitting beside it. Arrays are values, not paths.
+      const flatten = (prefix: string, value: unknown) => {
+        if (
+          value !== null &&
+          typeof value === "object" &&
+          !Array.isArray(value)
+        ) {
+          for (const [k, v] of Object.entries(value)) flatten(`${prefix}.${k}`, v);
+        } else if (value !== undefined) {
+          raceFields[prefix] = value;
+        }
+      };
+      flatten("settings", patch.settings);
       applied.settings = patch.settings;
     }
 
@@ -589,6 +600,51 @@ export async function completeLap(
       playerId,
       lap,
       round: live.currentRound,
+    });
+  });
+}
+
+/**
+ * Sets one property of a car's status card.
+ *
+ * Clamped to 0..max **here**, not only in the UI: "any new value within the
+ * limit on the card" is the only rule there is, and it belongs where every
+ * caller hits it — including the Phase 3 chatbot. An unknown key is refused
+ * rather than quietly stored, so a typo can't invent a property.
+ *
+ * There are deliberately no permissions and no cheat prevention. Anyone can
+ * change anyone's values, exactly as anyone can reach across the table and move
+ * your pegs. The claim from My Racer decides whose card shows under "My car",
+ * and nothing more.
+ */
+export async function setCarStatus(
+  raceId: string,
+  playerId: PlayerId,
+  key: string,
+  value: number,
+  who: Actor,
+) {
+  await runTransaction(db, async (tx) => {
+    const race = await readRace(tx, raceId);
+    const snap = await tx.get(participantDoc(raceId, playerId));
+    if (!snap.exists()) throw new Error(`${playerId} is not in this race`);
+
+    const property = race.settings?.carStatus?.spec?.find((p) => p.key === key);
+    if (!property) throw new Error(`No car status property "${key}"`);
+
+    const current = snap.data() as Participant;
+    // Absent means full — the card starts undamaged and nothing is backfilled.
+    const from = current.carStatus?.[key] ?? property.max;
+    const to = Math.max(0, Math.min(property.max, Math.round(value)));
+    if (from === to) return;
+
+    tx.update(participantDoc(raceId, playerId), { [`carStatus.${key}`]: to });
+    appendEvent(tx, raceId, who, {
+      type: "carStatusChanged",
+      playerId,
+      key,
+      from,
+      to,
     });
   });
 }

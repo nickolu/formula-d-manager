@@ -36,6 +36,14 @@ export interface Season {
  */
 export type RaceStatus = "scheduled" | "live" | "complete";
 
+/** One tracked property of the car status card. */
+export interface CarStatusProperty {
+  key: string;
+  label: string;
+  /** Full value. Varies by house variant, which is why it isn't in code. */
+  max: number;
+}
+
 /**
  * Per-race feature toggles. Optional, and absent means off, so races created
  * before a toggle existed keep working untouched.
@@ -43,8 +51,15 @@ export type RaceStatus = "scheduled" | "live" | "complete";
 export interface RaceSettings {
   /** Stop on nobody's turn between rounds so the table can confirm order. */
   betweenRounds?: boolean;
-  /** Show the per-car status counter. */
-  carStatus?: boolean;
+  /**
+   * The car status card. Configured per race rather than in code, following
+   * the scoringConfig precedent: maxima vary by house variant and changing one
+   * must not need a deploy.
+   */
+  carStatus?: {
+    enabled: boolean;
+    spec: CarStatusProperty[];
+  };
 }
 
 /**
@@ -100,6 +115,20 @@ export interface Participant {
   lapsCompleted: number;
   finalPosition: number | null;
   dnf: boolean;
+  /**
+   * Remaining values on the car status card, by property key.
+   *
+   * A key absent means full — nothing is backfilled, so a participant that
+   * predates the feature reads as an undamaged car.
+   *
+   * This is NOT board state. The app never derives anything from these numbers
+   * and never enforces a rule with them: it is a shared counter standing in for
+   * a piece of cardboard, the way the standings list stands in for looking at
+   * the table. Keep it that way — the moment something validates a move against
+   * remaining tires, this becomes a board model and the rejection in AGENTS.md
+   * applies.
+   */
+  carStatus?: Record<string, number>;
   /**
    * The anonymous auth uid that has claimed this racer, or null/absent.
    *
@@ -284,6 +313,20 @@ export interface RaceStartedEvent extends BaseEvent {
 }
 
 /**
+ * A partial edit of RaceSettings, one level deeper than Partial<> reaches.
+ * Switching car status on must not require restating the spec beside it —
+ * updateRaceSettings writes nested settings by dot path precisely so it
+ * doesn't.
+ */
+export interface RaceSettingsPatchShape {
+  betweenRounds?: boolean;
+  carStatus?: {
+    enabled?: boolean;
+    spec?: CarStatusProperty[];
+  };
+}
+
+/**
  * A change to how the race is configured. Carries only the fields that
  * actually changed, so the log reads as a diff rather than a snapshot.
  */
@@ -293,7 +336,7 @@ export interface RaceSettingsChangedEvent extends BaseEvent {
     track?: string;
     lapCount?: number;
     turnSeconds?: number;
-    settings?: RaceSettings;
+    settings?: RaceSettingsPatchShape;
   };
 }
 
@@ -330,6 +373,15 @@ export interface RacerReleasedEvent extends BaseEvent {
   type: "racerReleased";
   playerId: PlayerId;
   uid: string;
+}
+
+/** One property of a car's status card was changed. */
+export interface CarStatusChangedEvent extends BaseEvent {
+  type: "carStatusChanged";
+  playerId: PlayerId;
+  key: string;
+  from: number;
+  to: number;
 }
 
 /** Commentary on one car's race. An empty note is a clearing, and is logged. */
@@ -385,6 +437,7 @@ export type RaceEvent =
   | LapCompletedEvent
   | DnfChangedEvent
   | ParticipantNoteSetEvent
+  | CarStatusChangedEvent
   | RacerClaimedEvent
   | RacerReleasedEvent
   | TurnRewoundEvent

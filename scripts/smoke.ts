@@ -34,6 +34,7 @@ import {
   removePlayer,
   resumeTurn,
   rewindTurn,
+  setCarStatus,
   setDnf,
   setParticipantNote,
   setPositionOrder,
@@ -513,6 +514,36 @@ async function main() {
   check("releasing a racer you don't hold is a no-op", (await claimOf("alpha")) === PHONE_B);
   await releaseRacer(raceId, "alpha", PHONE_B, { source: "manual" });
   check("releasing your own racer frees it", (await claimOf("alpha")) === null);
+
+  console.log("\ncar status:");
+  const statusOf = async (id: string) =>
+    ((await getDoc(doc(db, "races", raceId, "participants", id))).data() as Participant)
+      .carStatus ?? {};
+  // The toggle governs display, not data: setCarStatus validates against the
+  // spec, which exists whether or not the card is being shown. Turning it off
+  // and back on therefore keeps the values, rather than throwing them away.
+  await setCarStatus(raceId, "alpha", "brakes", 1, { source: "manual" });
+  check("the spec, not the toggle, is what a value is validated against", (await statusOf("alpha")).brakes === 1);
+
+  mark0 = states.length;
+  await updateRaceSettings(raceId, { settings: { carStatus: { enabled: true } } }, { source: "manual" });
+  const withCard = (await getDoc(doc(db, "races", raceId))).data() as Race;
+  check("switching it on leaves the spec beside it alone", (withCard.settings?.carStatus?.spec?.length ?? 0) > 0, `${withCard.settings?.carStatus?.spec?.length}`);
+  check("the between-rounds toggle is untouched by it", withCard.settings?.betweenRounds === false, `${withCard.settings?.betweenRounds}`);
+
+  await setCarStatus(raceId, "alpha", "tires", 20, { source: "manual" });
+  check("a value persists", (await statusOf("alpha")).tires === 20, `${(await statusOf("alpha")).tires}`);
+  // Clamped HERE, not only in the UI — the limit on the card is the only rule
+  // there is, and every caller has to hit it.
+  await setCarStatus(raceId, "alpha", "tires", 999, { source: "manual" });
+  check("a value over the max clamps to it", (await statusOf("alpha")).tires === 30, `${(await statusOf("alpha")).tires}`);
+  await setCarStatus(raceId, "alpha", "tires", -5, { source: "manual" });
+  check("a negative value clamps to zero", (await statusOf("alpha")).tires === 0, `${(await statusOf("alpha")).tires}`);
+  check("an untouched property stays absent, meaning full", (await statusOf("alpha")).engine === undefined);
+  await rejects(
+    () => setCarStatus(raceId, "alpha", "wings", 1, { source: "manual" }),
+    "an unknown property is refused",
+  );
 
   console.log("\nnotes:");
   const noteOf = async (id: string) =>

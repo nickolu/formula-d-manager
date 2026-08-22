@@ -137,8 +137,11 @@ function describePatch(patch: RaceSettingsChangedEvent["patch"]): string {
   if (patch.track !== undefined) parts.push(`track is now ${patch.track}`);
   if (patch.lapCount !== undefined) parts.push(`${patch.lapCount} laps`);
   if (patch.turnSeconds !== undefined) parts.push(`${patch.turnSeconds}s turns`);
-  for (const [key, value] of Object.entries(patch.settings ?? {})) {
-    parts.push(`${key} ${value ? "on" : "off"}`);
+  if (patch.settings?.betweenRounds !== undefined) {
+    parts.push(`between-rounds pause ${patch.settings.betweenRounds ? "on" : "off"}`);
+  }
+  if (patch.settings?.carStatus?.enabled !== undefined) {
+    parts.push(`car status ${patch.settings.carStatus.enabled ? "on" : "off"}`);
   }
   return parts.join(", ");
 }
@@ -183,6 +186,8 @@ function describe(event: RaceEvent, nameOf: (id: PlayerId) => string): string {
       return event.note
         ? `Note on ${nameOf(event.playerId)}: ${event.note}`
         : `Note on ${nameOf(event.playerId)} cleared.`;
+    case "carStatusChanged":
+      return `${nameOf(event.playerId)}: ${event.key} ${event.from} → ${event.to}.`;
     case "racerClaimed":
       return `${nameOf(event.playerId)} was claimed by a player's device.`;
     case "racerReleased":

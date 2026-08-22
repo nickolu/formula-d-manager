@@ -1,5 +1,6 @@
 import { collection, doc, serverTimestamp, writeBatch } from "firebase/firestore";
 import { db } from "./firebase";
+import type { CarStatusProperty } from "./types";
 
 /** Player ids are slugs of their name so the same human is stable across races. */
 export function playerId(name: string): string {
@@ -9,6 +10,19 @@ export function playerId(name: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
 }
+
+/**
+ * A sensible starting card. Tires at 30 matches the card in use here; the rest
+ * are the usual three. Config, not code — this is only the seed.
+ */
+export const DEFAULT_CAR_STATUS_SPEC: CarStatusProperty[] = [
+  { key: "tires", label: "Tires", max: 30 },
+  { key: "brakes", label: "Brakes", max: 3 },
+  { key: "gearbox", label: "Gearbox", max: 3 },
+  { key: "engine", label: "Engine", max: 3 },
+  { key: "body", label: "Body", max: 3 },
+  { key: "nitro", label: "Nitro", max: 2 },
+];
 
 export interface NewRaceInput {
   track: string;
@@ -47,7 +61,13 @@ export async function createRace(input: NewRaceInput): Promise<string> {
     // On for new races, off for races that predate the field. Silently
     // changing the flow of a race already in progress is worse than an old
     // race not getting a new feature.
-    settings: { betweenRounds: true },
+    settings: {
+      betweenRounds: true,
+      // Off by default; the spec is seeded so a race can be switched on
+      // without anyone having to author one. Edit it in the Firestore console
+      // for a house variant — that is the point of it not being in code.
+      carStatus: { enabled: false, spec: DEFAULT_CAR_STATUS_SPEC },
+    },
   });
 
   batch.set(doc(db, "races", raceRef.id, "state", "live"), {
