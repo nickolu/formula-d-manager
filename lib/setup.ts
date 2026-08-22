@@ -1,4 +1,11 @@
-import { collection, doc, getDoc, serverTimestamp, writeBatch } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  serverTimestamp,
+  writeBatch,
+} from "firebase/firestore";
 import { db } from "./firebase";
 import type { CarStatusProperty, GearRange, Race } from "./types";
 
@@ -96,6 +103,22 @@ export async function createRace(input: NewRaceInput): Promise<string> {
     throw new Error(`No season ${input.seasonId}`);
   }
 
+  // A phone claims its racer once a season, not every game night. This is a
+  // seed and not a second source of truth: participants/{id}.claimedBy is the
+  // in-race authority from here on, and it stays re-tappable.
+  //
+  // Read here rather than imported from ./seasons, which imports this module
+  // for the id slug — a cycle for one query. Outside the batch, because a batch
+  // cannot read.
+  const members = await getDocs(
+    collection(db, "seasons", input.seasonId, "members"),
+  );
+  const claims = new Map<string, string>();
+  for (const m of members.docs) {
+    const claimedBy = m.data().claimedBy as string | null | undefined;
+    if (claimedBy) claims.set(m.id, claimedBy);
+  }
+
   const ids = names.map(playerId);
   const batch = writeBatch(db);
   const raceRef = doc(collection(db, "races"));
@@ -175,6 +198,7 @@ export async function createRace(input: NewRaceInput): Promise<string> {
       lapsCompleted: 0,
       finalPosition: null,
       dnf: false,
+      claimedBy: claims.get(id) ?? null,
     });
   });
 

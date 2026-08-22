@@ -238,6 +238,16 @@ export async function joinRace(
       throw new Error(`${trimmed} is already racing — claim them from the list`);
     }
 
+    // A caller with a uid is a phone putting its own name in, so that wins.
+    // Otherwise fall back to the season claim, which is how a member added to
+    // the league mid-season arrives already belonging to the right phone. Read
+    // before any write, as every transaction here must.
+    const seasonClaim = uid
+      ? null
+      : (((
+          await tx.get(doc(db, "seasons", race.seasonId, "members", id))
+        ).data()?.claimedBy ?? null) as string | null);
+
     // merge so a returning player's record isn't clobbered, matching createRace.
     tx.set(
       doc(db, "players", id),
@@ -250,7 +260,7 @@ export async function joinRace(
       lapsCompleted: 0,
       finalPosition: null,
       dnf: false,
-      claimedBy: uid ?? null,
+      claimedBy: uid ?? seasonClaim,
     });
     tx.update(liveDoc(raceId), {
       positionOrder: [...live.positionOrder, id],

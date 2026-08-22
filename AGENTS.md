@@ -276,6 +276,43 @@ append a `playerJoined` claiming they arrived today, when they were already on
 those grids: a migration records that the roster caught up with history, not
 that history happened again.
 
+**The root did not become a season picker, and that was the decision most
+likely to get quietly reversed.** `/` is still a list of races; the season is
+*named in the header with a switcher beside it* — a control on the page, not a
+door in front of it. A picker would make the root a different page at every
+season rollover and add a tap to every game night for a league with one active
+season, which is the same reasoning that already forbids auto-redirecting to a
+single live race. `app/SeasonRaces.tsx` renders both `/` and `/season/:id`,
+because they are the same page and two copies would drift.
+
+**"Current season" is derived, not flagged**: the newest season that has not
+been archived. Nothing has to be remembered to be set — a new season becomes
+current by existing, an old one stops by being archived. If pinning is ever
+wanted, a `seasons/{id}.current` read inside `useCurrentSeason` is the whole
+change. `/standings` stays as a **redirect** to `/season/:id/standings` because
+phones have it bookmarked; it is a client redirect rather than a
+`next.config.ts` one because the destination is a document id nobody knows until
+the seasons collection has been read, and it `replace`s rather than pushes so it
+does not sit in the back stack bouncing the player forward.
+
+**The season claim is a default, not a second source of truth.**
+`SeasonMember.claimedBy` lets a phone claim once a season instead of every game
+night; `createRace` and `joinRace` *seed* `participants/{id}.claimedBy` from it,
+and from then on the in-race claim is authoritative and still re-tappable — which
+is what makes a stale claim from a borrowed tablet one tap to fix. "My racer" is
+still derived from the participant, never stored. `claimSeasonRacer` takes the
+racer the caller currently holds for the same reason `claimRacer` does: the web
+SDK cannot query a collection inside a transaction, so the value is verified
+before being cleared and a stale one can never free someone else's claim.
+
+Updating the season claim from the player view is deliberately **best-effort and
+silent on failure**. The in-race claim has already been written by then, so
+surfacing "someone else has that racer" about a racer visibly theirs would be a
+lie about what happened; the worst case is that next week seeds nothing and they
+tap again. Putting your own name in mid-race also joins you to the *league*, not
+just to tonight's race — otherwise you would be missing from the roster the next
+grid is built from.
+
 **Firestore rules do not inherit into subcollections.** `match /seasons/{id}`
 covers the season document and nothing under it, and a missing nested match is
 a silent permission denial at the table, not a build error. So `events`
@@ -579,8 +616,10 @@ nudging, per-car laps, manual correction.
     from it, and standings seed a zero row per member so a missed night costs
     nothing and rewrites no sealed race. `npm run backfill-season-members`
     builds the roster from races already run.
-  - **Next:** player-side season scoping (`/season/:id` and the header
-    switcher), then backfill/amend, then teams — the arc laid out in
+  - **Done:** player-side season scoping — `/season/:id`, per-season standings,
+    a switcher in the header rather than a picker in front of the root, and a
+    racer claim that lasts the season and seeds each race's.
+  - **Next:** backfill and amend a past race, then teams — the arc laid out in
     `docs/seasons-and-teams.md`.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
     rules tighten — right now any signed-in caller can write anything, which

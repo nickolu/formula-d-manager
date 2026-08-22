@@ -568,6 +568,23 @@ export interface SeasonSettingsChangedEvent extends BaseEvent {
 }
 
 /**
+ * A phone claimed a racer for the whole season, so it does not have to claim
+ * again every game night. The in-race claim stays authoritative.
+ */
+export interface SeasonRacerClaimedEvent extends BaseEvent {
+  type: "seasonRacerClaimed";
+  playerId: PlayerId;
+  uid: string;
+}
+
+/** A phone gave a season claim back. */
+export interface SeasonRacerReleasedEvent extends BaseEvent {
+  type: "seasonRacerReleased";
+  playerId: PlayerId;
+  uid: string;
+}
+
+/**
  * The season's append-only log, under `seasons/{id}/events`.
  *
  * It ships before anything reads it, and that is deliberate. Nothing replays
@@ -584,4 +601,6 @@ export type SeasonEvent =
   | SeasonCreatedEvent
   | SeasonSettingsChangedEvent
   | MemberAddedEvent
-  | MemberRemovedEvent;
+  | MemberRemovedEvent
+  | SeasonRacerClaimedEvent
+  | SeasonRacerReleasedEvent;

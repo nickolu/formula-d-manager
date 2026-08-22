@@ -29,6 +29,7 @@ import {
   finishRace,
   joinRace,
   liveDoc,
+  participantDoc,
   pauseTurn,
   raceDoc,
   releaseRacer,
@@ -48,9 +49,11 @@ import {
 import { computeStandings, pointsFor } from "../lib/scoring";
 import {
   addSeasonMember,
+  claimSeasonRacer,
   createSeason,
   DEFAULT_SCORING,
   deleteSeason,
+  releaseSeasonRacer,
   removeSeasonMember,
   seasonDoc,
   seasonEventsCol,
@@ -914,7 +917,95 @@ async function main() {
     "removing a member who is racing right now is refused",
   );
 
-  await finishRace(rosterRaceId, ["alpha", "bravo", foxtrot], [], {
+  console.log("\nthe season claim — claim once, not every game night:");
+  await claimSeasonRacer(seasonId, foxtrot, "uid-smoke-1", null, {
+    source: "manual",
+  });
+  check(
+    "the claim lands on the member",
+    (await getDoc(seasonMemberDoc(seasonId, foxtrot))).data()?.claimedBy ===
+      "uid-smoke-1",
+  );
+  await rejects(
+    () =>
+      claimSeasonRacer(seasonId, foxtrot, "uid-smoke-2", null, {
+        source: "manual",
+      }),
+    "a second phone cannot take a claimed racer",
+  );
+  await claimSeasonRacer(seasonId, foxtrot, "uid-smoke-1", null, {
+    source: "manual",
+  });
+  check("re-claiming your own racer is a no-op, not an error", true);
+  await rejects(
+    () =>
+      claimSeasonRacer(seasonId, "nobody", "uid-smoke-1", null, {
+        source: "manual",
+      }),
+    "claiming someone who is not in the season is refused",
+  );
+
+  // The whole point: a new race seeds its participants from the season claim,
+  // so the phone does not have to claim again.
+  const seededRaceId = await createRace({
+    track: "SMOKE-TEST seeded",
+    lapCount: 1,
+    turnSeconds: TURN_SECONDS,
+    playerNames: ["Foxtrot", "Alpha"],
+    seasonId,
+  });
+  check(
+    "a new race seeds the claim from the season",
+    ((await getDoc(participantDoc(seededRaceId, foxtrot))).data() as Participant)
+      ?.claimedBy === "uid-smoke-1",
+  );
+  check(
+    "...and leaves an unclaimed racer unclaimed",
+    ((await getDoc(participantDoc(seededRaceId, "alpha"))).data() as Participant)
+      ?.claimedBy === null,
+  );
+  // The other half of the seeding: a player who joins a race that already
+  // exists picks the claim up too, which is what makes "claim once a season"
+  // true for a latecomer and not only for a race created afterwards.
+  const golf = await addSeasonMember(seasonId, "Golf", { source: "manual" });
+  await claimSeasonRacer(seasonId, golf, "uid-smoke-3", null, {
+    source: "manual",
+  });
+  await removePlayer(seededRaceId, golf, { source: "manual" });
+  await joinRace(seededRaceId, "Golf", null, { source: "manual" });
+  check(
+    "joining an existing race seeds the claim too",
+    ((await getDoc(participantDoc(seededRaceId, golf))).data() as Participant)
+      ?.claimedBy === "uid-smoke-3",
+  );
+
+  await finishRace(seededRaceId, [foxtrot, "alpha", golf], [], {
+    source: "manual",
+  });
+  await deleteRace(seededRaceId);
+
+  await releaseSeasonRacer(seasonId, foxtrot, "uid-smoke-2", {
+    source: "manual",
+  });
+  check(
+    "a phone that does not hold the claim cannot release it",
+    (await getDoc(seasonMemberDoc(seasonId, foxtrot))).data()?.claimedBy ===
+      "uid-smoke-1",
+  );
+  await releaseSeasonRacer(seasonId, foxtrot, "uid-smoke-1", {
+    source: "manual",
+  });
+  check(
+    "the holder can give it back",
+    (await getDoc(seasonMemberDoc(seasonId, foxtrot))).data()?.claimedBy === null,
+  );
+  check(
+    "season claims are logged",
+    (await seasonEventTypes(seasonId)).includes("seasonRacerClaimed") &&
+      (await seasonEventTypes(seasonId)).includes("seasonRacerReleased"),
+  );
+
+  await finishRace(rosterRaceId, ["alpha", "bravo", foxtrot, golf], [], {
     source: "manual",
   });
   await deleteRace(rosterRaceId);

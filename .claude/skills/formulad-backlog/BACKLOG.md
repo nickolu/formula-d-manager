@@ -26,7 +26,7 @@ fields exist.
 | 12 | 11 | Per-player car status | **done** | 6, 10 |
 | 13 | 13 | Seasons as a real entity | **done** | — |
 | 14 | 14 | The season roster | **done** | 13 |
-| 15 | 15 | Player-side season scoping + season claim | `todo` | 13, 14 |
+| 15 | 15 | Player-side season scoping + season claim | **done** | 13, 14 |
 | 16 | 16 | Backfill and amend a race | `todo` | 13, 14 |
 | 17 | 17 | Teams, admin side | `todo` | 13, 14 |
 | 18 | 18 | Teams, player side | `todo` | 17 |
@@ -106,10 +106,10 @@ Settled with the user before any of 13–19 was specced. Recorded here and in
 Not blocking, but they will surface. Decide when the item comes up, then record
 the answer in the spec file and in `AGENTS.md`.
 
-- **Is "current season" the newest non-archived one, or an explicit flag?**
-  Item 15 assumes newest-non-archived and notes a `seasons/{id}.current` flag as
-  the alternative if the commissioner ever wants to pin it. Decide when a second
-  season actually exists.
+- ~~**Is "current season" the newest non-archived one, or an explicit flag?**~~
+  **Resolved in item 15: newest non-archived**, derived in `useCurrentSeason`
+  so nothing has to be remembered to be set. A `seasons/{id}.current` flag read
+  in that one hook is the whole change if pinning is ever wanted.
 - **Does the season event log get a history view?** Deferred deliberately in
   item 13 — append now, view when someone wants to read it.
 - ~~**How does a player get the URL?**~~ **Resolved by item 12:** `/` becomes a

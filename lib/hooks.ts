@@ -190,11 +190,15 @@ export function useRaceEvents(raceId: string, max = 300) {
  * Scoring config is read live rather than bundled, so house rules can be edited
  * in the Firestore console and every open standings page re-sorts immediately.
  */
-export function useSeason(seasonId: string) {
+export function useSeason(seasonId: string | null | undefined) {
   const [season, setSeason] = useState<Season | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Hooks cannot be called conditionally, so a caller that does not yet know
+    // which season it wants passes nothing rather than an empty id — which
+    // Firestore rejects as a document path.
+    if (!seasonId) return;
     const unsubscribe = onSnapshot(seasonDoc(seasonId), (snap) => {
       setSeason(snap.exists() ? ({ id: snap.id, ...snap.data() } as Season) : null);
       setLoading(false);
@@ -226,6 +230,28 @@ export function useSeasons() {
   }, []);
 
   return { seasons, loading };
+}
+
+/**
+ * The season the app is "in" right now: the newest one that has not been
+ * archived.
+ *
+ * Derived rather than flagged, so there is nothing to forget to set — a new
+ * season becomes current by existing, and an old one stops being current by
+ * being archived. If the commissioner ever wants to pin it, a
+ * `seasons/{id}.current` flag read here is the change, and nothing else moves.
+ *
+ * Note what this does NOT do: `/` is not gated behind it. The root is still a
+ * list of races with the season named in the header and a switcher beside it,
+ * because the root must not behave differently week to week.
+ */
+export function useCurrentSeason() {
+  const { seasons, loading } = useSeasons();
+  const season = useMemo(
+    () => seasons.find((s) => !s.archived) ?? null,
+    [seasons],
+  );
+  return { season, seasons, loading };
 }
 
 /**

@@ -2,10 +2,14 @@
 
 import Link from "next/link";
 import { usePlayers, useStandings } from "@/lib/hooks";
-import { DEFAULT_SEASON_ID } from "@/lib/seasons";
 
-export default function StandingsTable() {
-  const { standings, season, loading, racesRun } = useStandings(DEFAULT_SEASON_ID);
+/**
+ * Standings for one season. The id is a prop rather than a constant because
+ * there is more than one season now — and because a season's standings have to
+ * stay reachable after it is archived.
+ */
+export default function StandingsTable({ seasonId }: { seasonId: string }) {
+  const { standings, season, loading, racesRun } = useStandings(seasonId);
   const players = usePlayers();
 
   if (loading) {
@@ -15,9 +19,11 @@ export default function StandingsTable() {
   if (!season) {
     return (
       <p className="mt-8 text-neutral-500">
-        No season yet. Run{" "}
-        <code className="text-neutral-300">npm run seed-season</code> to create
-        one.
+        That season is gone. Its races may still be listed on{" "}
+        <Link href="/" className="text-emerald-500">
+          the race list
+        </Link>
+        .
       </p>
     );
   }

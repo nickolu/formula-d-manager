@@ -311,6 +311,86 @@ export async function removeSeasonMember(
 }
 
 /**
+ * Claims a racer for the whole season, so a phone claims once instead of every
+ * game night.
+ *
+ * This is a **default, not a second source of truth.** `createRace` and
+ * `joinRace` seed `participants/{id}.claimedBy` from it, and from then on the
+ * in-race claim is authoritative and still re-tappable — which is what makes a
+ * stale claim from a borrowed tablet one tap to fix. "My racer" is still
+ * *derived*: the participant whose `claimedBy` matches this device's uid.
+ * Nothing anywhere stores "which racer is mine".
+ *
+ * `currentlyHeld` is the racer this device already holds, passed in rather than
+ * looked up because **the web SDK cannot run a collection query inside a
+ * transaction** — the same problem `claimRacer` solved. It is *verified* before
+ * being cleared, so a stale value can never free someone else's claim.
+ *
+ * Today the uid is a device, not a person. When Phase 2 brings Google accounts
+ * this becomes a real person-to-racer link, which is the shape to build toward.
+ */
+export async function claimSeasonRacer(
+  seasonId: string,
+  playerId: PlayerId,
+  uid: string,
+  currentlyHeld: PlayerId | null,
+  who: Actor,
+) {
+  await runTransaction(db, async (tx) => {
+    const ref = seasonMemberDoc(seasonId, playerId);
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error(`${playerId} is not in this season`);
+
+    const previous =
+      currentlyHeld && currentlyHeld !== playerId
+        ? await tx.get(seasonMemberDoc(seasonId, currentlyHeld))
+        : null;
+
+    const claimedBy = (snap.data().claimedBy ?? null) as string | null;
+    if (claimedBy === uid) return; // already ours
+    if (claimedBy) throw new Error("Someone else already has that racer");
+
+    if (previous?.exists() && previous.data().claimedBy === uid) {
+      tx.update(previous.ref, { claimedBy: null });
+      appendSeasonEvent(tx, seasonId, who, {
+        type: "seasonRacerReleased",
+        playerId: currentlyHeld,
+        uid,
+      });
+    }
+
+    tx.update(ref, { claimedBy: uid });
+    appendSeasonEvent(tx, seasonId, who, {
+      type: "seasonRacerClaimed",
+      playerId,
+      uid,
+    });
+  });
+}
+
+/** Gives a season claim back. A uid that doesn't hold it is a no-op, not an error. */
+export async function releaseSeasonRacer(
+  seasonId: string,
+  playerId: PlayerId,
+  uid: string,
+  who: Actor,
+) {
+  await runTransaction(db, async (tx) => {
+    const ref = seasonMemberDoc(seasonId, playerId);
+    const snap = await tx.get(ref);
+    if (!snap.exists()) return;
+    if (snap.data().claimedBy !== uid) return;
+
+    tx.update(ref, { claimedBy: null });
+    appendSeasonEvent(tx, seasonId, who, {
+      type: "seasonRacerReleased",
+      playerId,
+      uid,
+    });
+  });
+}
+
+/**
  * Deletes a season, and **refuses one that has any race**.
  *
  * Cascading would mean deleting races, and deleteRace already refuses anything
