@@ -11,11 +11,18 @@ process for working them: pick one, read its spec, build it, verify it, close it
 **Read `BACKLOG.md` first.** It is the live status board and the only place
 status is recorded. Item specs live in `items/NN-slug.md`.
 
-Items 1–12 are done — Phase 1 plus the Phase 2 UI pass. Items 13–19 are the
-**seasons and teams arc**, and they share one design document:
+**All 20 items are done.** Items 1–12 were Phase 1 plus the Phase 2 UI pass;
+13–19 were the seasons and teams arc, which shares one design document:
 **`docs/seasons-and-teams.md` in the repo is authoritative for that model.**
-Read it before any of 13–19; the item specs carry scope, files and acceptance,
-and defer to it on the model itself.
+
+The backlog is not the live picture any more — `AGENTS.md` is. A shipped item's
+spec records what was decided *at the time*, and several were amended
+afterwards; **`BACKLOG.md`'s "Amended after shipping" section is the list, and
+it outranks the item specs.** Read it before trusting a spec file.
+
+What is still open — a mobile pass that has never actually been done, and the
+follow-ups that came out of using the thing — is in `BACKLOG.md` too. New work
+gets a new numbered item and spec, in the same shape as the existing ones.
 
 ## The paradigm everything hangs off
 
@@ -56,6 +63,11 @@ Consequences that bind every item:
 
 ## Working an item
 
+0. If the item is already `done`, you are amending rather than building: read
+   "Amended after shipping" first, and add to it rather than editing the spec's
+   original reasoning out of existence. This repo's house style is that a
+   decision without a recorded reason gets re-argued later — which applies
+   double to a decision that was *reversed*.
 1. Read `BACKLOG.md`, confirm the item is `todo` and its dependencies are `done`.
 2. Read `items/NN-slug.md` in full — it carries decisions already made, files to
    touch, and acceptance criteria. Do not re-litigate a decision recorded there;

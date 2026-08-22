@@ -30,9 +30,19 @@ is a control on the page rather than a door in front of it.
 ```
 /                              current season's races + switcher   (unchanged shape)
 /season/:seasonId              that season's races — the same page, explicit
+/season/:seasonId/racer        added after this item shipped — see below
 /season/:seasonId/standings    per-season standings
 /standings                     → redirects to the current season's standings
 ```
+
+**Amended after shipping.** This item moved the claim to the season but left the
+only screen that could *make* one inside a race, so a player still had to open a
+race to say which racer was theirs — which is backwards, since the in-race claim
+is a re-tappable override rather than where identity comes from.
+`/season/:id/racer` is that screen, the loose header links became a Races /
+Racer / Standings tab bar (`app/SeasonTabs.tsx`), and the in-race "my racer"
+falls back to the season claim when that participant is unclaimed in the race.
+See `BACKLOG.md`, "Amended after shipping".
 
 The redirect goes **straight to the current path**, never chaining — the
 tablets have old URLs bookmarked and a second round trip on house wifi buys
