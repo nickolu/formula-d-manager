@@ -42,6 +42,19 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
   const [previewing, setPreviewing] = useState<PlayerId | null>(null);
   const [joinName, setJoinName] = useState("");
 
+  /**
+   * For changes that render themselves optimistically: no busy flag, so
+   * nothing on screen dims while the write is in flight. Errors still surface.
+   */
+  async function runQuiet(action: () => Promise<void>) {
+    setError(null);
+    try {
+      await action();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async function run(action: () => Promise<void>, dismiss = true) {
     setBusy(true);
     setError(null);
@@ -84,18 +97,18 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
       retired={retired.has(id)}
       position={order.indexOf(id) + 1}
       carStatusSpec={carStatusSpec}
-      busy={busy}
       // Anyone can change anyone's card, the same way anyone can reach across
       // the table. The claim decides whose shows up top, nothing more.
+      //
+      // runQuiet, not run: a card edit must not raise the busy flag. The card
+      // renders the change immediately and reverts itself if the write fails,
+      // so dimming the screen around it would only make a peg tap feel slow.
       onSetCarStatus={(key, value) =>
-        run(
-          () => setCarStatus(raceId, id, key, value, { source: "manual" }),
-          false,
-        )
+        runQuiet(() => setCarStatus(raceId, id, key, value, { source: "manual" }))
       }
       gears={gears}
       onSetGear={(gear) =>
-        run(() => setGear(raceId, id, gear, { source: "manual" }), false)
+        runQuiet(() => setGear(raceId, id, gear, { source: "manual" }))
       }
     />
   );

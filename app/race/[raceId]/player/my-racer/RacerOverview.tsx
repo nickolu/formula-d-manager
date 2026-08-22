@@ -21,7 +21,6 @@ export default function RacerOverview({
   onSetCarStatus,
   gears,
   onSetGear,
-  busy = false,
 }: {
   name: string;
   car?: Car;
@@ -31,10 +30,9 @@ export default function RacerOverview({
   position: number;
   /** Absent when the race has car status switched off. */
   carStatusSpec?: CarStatusProperty[];
-  onSetCarStatus?: (key: string, value: number) => void;
+  onSetCarStatus?: (key: string, value: number) => Promise<void>;
   gears?: GearRange[];
-  onSetGear?: (gear: number | null) => void;
-  busy?: boolean;
+  onSetGear?: (gear: number | null) => Promise<void>;
 }) {
   return (
     <div className="flex flex-col gap-4">
@@ -79,7 +77,6 @@ export default function RacerOverview({
               gears={gears}
               gear={participant?.gear ?? null}
               onSetGear={onSetGear}
-              disabled={busy}
             />
           </div>
         )}

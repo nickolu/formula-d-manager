@@ -255,6 +255,18 @@ it already exists so it can never clobber a scoring table tuned in the console.
   `carStatusSpecFor` is the one place that resolves it, used by both the view
   and the mutation. This is the "every reader handles the field's absence" rule
   doing its job: an old race gets the standard card, not a broken one.
+- **The car card renders a change before the write lands.** Firestore's latency
+  compensation covers plain writes but **not transactions**, and every mutation
+  here is a transaction — so the local cache has nothing to show until the
+  server answers, and a peg tap sat visibly waiting. `CarStatusCard` holds the
+  tapped value locally and shows it at once, releasing it when the *last*
+  outstanding write for that key settles (not the first — rapid taps overlap,
+  and clearing early would snap a peg back to a stale value while a later write
+  is still in flight). Once nothing is outstanding the streamed value is
+  authoritative again, so a failed write needs no rollback: dropping the held
+  value already reverts it. Card edits also go through `runQuiet`, which does
+  not raise the busy flag — dimming the card on every tap was most of what made
+  it feel slow.
 - **The reverse gear is deliberately not beside Next turn.** "Back a turn" is a
   small, muted link at the *top* of the player view, not a button in the row
   with the primary action. Next turn is tapped a few hundred times a night and
