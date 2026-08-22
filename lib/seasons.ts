@@ -17,12 +17,13 @@ import { db } from "./firebase";
 import { joinRace, participantDoc, removePlayer } from "./race";
 import { playerId as slugFor } from "./setup";
 import type {
-  EventSource,
+  Actor,
   PlayerId,
   Race,
   ScoringConfig,
   Season,
   SeasonSettingsPatchShape,
+  TeamConfigPatchShape,
 } from "./types";
 
 export const seasonsCol = () => collection(db, "seasons");
@@ -51,17 +52,15 @@ export const DEFAULT_SCORING: ScoringConfig = {
   dnfPoints: 0,
 };
 
-interface Actor {
-  source: EventSource;
-  actor?: string | null;
-}
-
 /**
  * The season log's counterpart to `lib/race.ts`'s appendEvent. Same shape, same
  * rule: every mutation writes its document and appends its event in one
  * transaction, and nothing writes a season document from a component.
+ *
+ * Exported for `lib/teams.ts`, which is the same log written by a different
+ * file — teams are season state, so their changes belong in the season's log.
  */
-function appendSeasonEvent(
+export function appendSeasonEvent(
   tx: Transaction,
   seasonId: string,
   { source, actor = null }: Actor,
@@ -176,6 +175,93 @@ export async function updateSeason(
     appendSeasonEvent(tx, seasonId, who, {
       type: "seasonSettingsChanged",
       patch: applied,
+    });
+  });
+}
+
+/**
+ * Turns teams on, and edits how they work. Written by **dot path**, exactly as
+ * `updateRaceSettings` writes race toggles: writing `teamConfig` whole would
+ * silently clear whichever field this caller did not mention — the palette,
+ * most obviously, which is the one nobody restates.
+ *
+ * Appends one `seasonSettingsChanged` carrying only what changed, so the log
+ * reads as a diff.
+ *
+ * Two things it deliberately does NOT do:
+ *
+ * - It does not enforce equal team sizes, or that the roster divides by
+ *   `teamSize`. Those span the whole season, so a transaction cannot check them
+ *   without a query — and enforcing them would block creating the third team
+ *   until the first two are full, which is hostile during the ten minutes the
+ *   commissioner spends setting a league up. The admin view flags them.
+ * - It does not kick anyone when `teamSize` shrinks below an existing team's
+ *   size. That blocks new joins and leaves everyone where they are. Removing
+ *   someone from their team because a setting changed is the sort of thing that
+ *   ends a game night.
+ *
+ * It does refuse to drop a palette colour a team currently holds, because the
+ * team would be left pointing at a colour that no longer exists.
+ */
+export async function updateTeamConfig(
+  seasonId: string,
+  patch: TeamConfigPatchShape,
+  who: Actor,
+) {
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(seasonDoc(seasonId));
+    if (!snap.exists()) throw new Error(`No season ${seasonId}`);
+    const season = { id: seasonId, ...snap.data() } as Season;
+
+    const applied: TeamConfigPatchShape = {};
+    const fields: Record<string, unknown> = {};
+
+    if (patch.enabled !== undefined) {
+      fields["teamConfig.enabled"] = patch.enabled;
+      applied.enabled = patch.enabled;
+    }
+    if (patch.teamSize !== undefined) {
+      if (!Number.isInteger(patch.teamSize) || patch.teamSize < 1) {
+        throw new Error("Team size must be a whole number, at least 1");
+      }
+      fields["teamConfig.teamSize"] = patch.teamSize;
+      applied.teamSize = patch.teamSize;
+    }
+    if (patch.playerManaged !== undefined) {
+      fields["teamConfig.playerManaged"] = patch.playerManaged;
+      applied.playerManaged = patch.playerManaged;
+    }
+    if (patch.scoring !== undefined) {
+      fields["teamConfig.scoring"] = patch.scoring;
+      applied.scoring = patch.scoring;
+    }
+    if (patch.palette !== undefined) {
+      if (patch.palette.length === 0) {
+        throw new Error("A palette needs at least one colour");
+      }
+      const keys = new Set(patch.palette.map((c) => c.key));
+      if (keys.size !== patch.palette.length) {
+        throw new Error("Two palette colours share a key");
+      }
+      // A team wearing a colour that has just been deleted would point at
+      // nothing. Read from the claimed-colours map on this same document.
+      for (const [key, teamId] of Object.entries(season.teamColors ?? {})) {
+        if (!keys.has(key)) {
+          throw new Error(
+            `${key} is being worn by a team — recolour or delete team ${teamId} first`,
+          );
+        }
+      }
+      fields["teamConfig.palette"] = patch.palette;
+      applied.palette = patch.palette;
+    }
+
+    if (Object.keys(applied).length === 0) return;
+
+    tx.update(seasonDoc(seasonId), fields);
+    appendSeasonEvent(tx, seasonId, who, {
+      type: "seasonSettingsChanged",
+      patch: { teamConfig: applied },
     });
   });
 }

@@ -21,11 +21,81 @@ export interface ScoringConfig {
   dnfPoints: number;
 }
 
+/** One colour a team can wear. Keys are stable ids, never reused for a different colour. */
+export interface TeamColor {
+  key: string;
+  label: string;
+  hex: string;
+}
+
+/**
+ * Teams, configured per season in Firestore rather than in code — the same
+ * precedent as `scoringConfig` and the car status spec. Absent means teams are
+ * off, so a season created before teams existed is untouched.
+ */
+export interface TeamConfig {
+  enabled: boolean;
+  /**
+   * Racers per team. The house rule is that every team is exactly this size,
+   * but **nothing enforces it** — that is a season-wide invariant and a
+   * transaction cannot check it without a query. It is surfaced in the UI
+   * instead. Configurable because 2 today does not mean 2 forever.
+   */
+  teamSize: number;
+  /**
+   * Whether players may create, rename, recolour, join and leave. Not security
+   * — there is no auth to enforce it with. What `lib/` does enforce is the soft
+   * check that actually works at a table: a player may edit the team they are
+   * on. Do not mistake this for a permission.
+   */
+  playerManaged: boolean;
+  /** Config, not code: house palettes churn. Seeded from DEFAULT_TEAM_PALETTE. */
+  palette: TeamColor[];
+  /**
+   * How member points make a team score. Kept even though with equal full teams
+   * `average` is `sum ÷ teamSize` — a monotone transform with an identical
+   * ranking. One field and one branch, and the only case where it matters is
+   * the one the house rule forbids and someone will eventually allow.
+   */
+  scoring?: "sum" | "average";
+}
+
+/**
+ * A constructor, for one season.
+ *
+ * `members` is the **capacity authority**: "is there an open slot" is
+ * `members.length < teamSize`, answerable from one document read. The matching
+ * `SeasonMember.teamId` is the **exclusivity authority**. Both are written in
+ * the same transaction — the web SDK cannot query a collection inside one, so
+ * each cross-document invariant has to live in a document the transaction can
+ * read. Same bargain as `retired` on the live doc.
+ */
+export interface Team {
+  id: string;
+  name: string;
+  colorKey: string;
+  members: PlayerId[];
+  createdAt: Timestamp;
+}
+
 export interface Season {
   id: string;
   name: string;
   scoringConfig: ScoringConfig;
   startDate: Timestamp;
+  /** Absent means teams are off — the same "absent means off" rule as RaceSettings. */
+  teamConfig?: TeamConfig;
+  /**
+   * Which palette colours are taken, and by whom: `{ ferrari: "team_abc" }`.
+   *
+   * "No two teams share a colour" spans every team in the season, which a
+   * transaction cannot query — so the answer is denormalized onto the one
+   * document every colour-changing transaction already reads. Written by **dot
+   * path**, never as a whole map: writing it whole would clobber a colour
+   * claimed a second earlier, exactly the reason `settings` toggles are written
+   * by dot path. Released with `deleteField()`.
+   */
+  teamColors?: Record<string, string>;
   /**
    * Absent means active — the usual "absent is meaningful" rule, so seasons
    * created before archiving existed need no migration. An archived season
@@ -271,6 +341,16 @@ export interface LiveState {
 }
 
 export type EventSource = "manual" | "chat" | "system";
+
+/**
+ * Who is making a change. Every mutation in `lib/` takes one, so a
+ * chat-entered mistake stays traceable to the chatbot rather than looking like
+ * something someone tapped.
+ */
+export interface Actor {
+  source: EventSource;
+  actor?: string | null;
+}
 
 /**
  * Shared by both append-only logs — the race log and the season log. They have
@@ -579,6 +659,19 @@ export interface SeasonSettingsPatchShape {
   name?: string;
   scoringConfig?: ScoringConfig;
   archived?: boolean;
+  teamConfig?: TeamConfigPatchShape;
+}
+
+/**
+ * A partial edit of TeamConfig, written by dot path so switching teams on does
+ * not require restating the palette beside it.
+ */
+export interface TeamConfigPatchShape {
+  enabled?: boolean;
+  teamSize?: number;
+  playerManaged?: boolean;
+  palette?: TeamColor[];
+  scoring?: "sum" | "average";
 }
 
 /** Seeds the season log the way raceCreated seeds a race's. */
@@ -613,6 +706,52 @@ export interface SeasonRacerReleasedEvent extends BaseEvent {
   uid: string;
 }
 
+/** A constructor was created. */
+export interface TeamCreatedEvent extends BaseEvent {
+  type: "teamCreated";
+  teamId: string;
+  name: string;
+  colorKey: string;
+}
+
+export interface TeamRenamedEvent extends BaseEvent {
+  type: "teamRenamed";
+  teamId: string;
+  name: string;
+}
+
+export interface TeamRecolouredEvent extends BaseEvent {
+  type: "teamRecoloured";
+  teamId: string;
+  colorKey: string;
+}
+
+export interface TeamDeletedEvent extends BaseEvent {
+  type: "teamDeleted";
+  teamId: string;
+  name: string;
+}
+
+/**
+ * A racer joined a team.
+ *
+ * Under the house rule that nobody switches teams during a season, a change
+ * here is not a transfer — it is a **correction of a recording error**, and it
+ * silently re-derives the whole season's team standings. This log is the only
+ * thing that records the change happened at all.
+ */
+export interface TeamJoinedEvent extends BaseEvent {
+  type: "teamJoined";
+  teamId: string;
+  playerId: PlayerId;
+}
+
+export interface TeamLeftEvent extends BaseEvent {
+  type: "teamLeft";
+  teamId: string;
+  playerId: PlayerId;
+}
+
 /**
  * The season's append-only log, under `seasons/{id}/events`.
  *
@@ -632,4 +771,10 @@ export type SeasonEvent =
   | MemberAddedEvent
   | MemberRemovedEvent
   | SeasonRacerClaimedEvent
-  | SeasonRacerReleasedEvent;
+  | SeasonRacerReleasedEvent
+  | TeamCreatedEvent
+  | TeamRenamedEvent
+  | TeamRecolouredEvent
+  | TeamDeletedEvent
+  | TeamJoinedEvent
+  | TeamLeftEvent;

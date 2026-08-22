@@ -20,6 +20,7 @@ import {
   seasonMembersCol,
   seasonsCol,
 } from "./seasons";
+import { teamsCol } from "./teams";
 import type {
   LiveState,
   Participant,
@@ -30,6 +31,7 @@ import type {
   Season,
   SeasonEvent,
   SeasonMember,
+  Team,
 } from "./types";
 
 /**
@@ -230,6 +232,27 @@ export function useSeasons() {
   }, []);
 
   return { seasons, loading };
+}
+
+/**
+ * The season's constructors. One listener; the picker and the slot grid both
+ * read it, and the taken-colours map comes from the season document they are
+ * already streaming, so no extra listener is needed for that either.
+ */
+export function useTeams(seasonId: string | null | undefined) {
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!seasonId) return;
+    const unsubscribe = onSnapshot(teamsCol(seasonId), (snap) => {
+      setTeams(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Team));
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, [seasonId]);
+
+  return { teams, loading };
 }
 
 /**

@@ -8,14 +8,14 @@ import NewRaceForm from "@/app/NewRaceForm";
 import RaceList from "@/app/RaceList";
 import BackfillForm from "./BackfillForm";
 import RosterSection from "./RosterSection";
+import TeamsSection from "./TeamsSection";
 import { useSeason } from "@/lib/hooks";
 import { deleteSeason, updateSeason } from "@/lib/seasons";
 import type { ScoringConfig } from "@/lib/types";
 
 /**
  * One season, everything about it in one page: its races, its roster, its
- * scoring, and the settings that seal or remove it. Teams is item 17 and lands
- * here as a further section.
+ * teams, its scoring, and the settings that seal or remove it.
  *
  * Every change goes through lib/seasons.ts, which writes the document and
  * appends a season event in one transaction. Nothing here writes a document
@@ -115,6 +115,8 @@ export default function SeasonAdminView({ seasonId }: { seasonId: string }) {
       </section>
 
       <RosterSection seasonId={seasonId} />
+
+      <TeamsSection seasonId={seasonId} season={season} />
 
       <section className="flex flex-col gap-3">
         <h2 className="text-xs uppercase tracking-widest text-neutral-500">

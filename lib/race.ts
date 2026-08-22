@@ -16,7 +16,7 @@ import {
 import { db } from "./firebase";
 import { carStatusSpecFor, gearsFor, playerId as slugFor, startOf } from "./setup";
 import type {
-  EventSource,
+  Actor,
   LiveState,
   Participant,
   PlayerId,
@@ -30,11 +30,6 @@ export const liveDoc = (raceId: string) => doc(db, "races", raceId, "state", "li
 export const eventsCol = (raceId: string) => collection(db, "races", raceId, "events");
 export const participantDoc = (raceId: string, playerId: PlayerId) =>
   doc(db, "races", raceId, "participants", playerId);
-
-interface Actor {
-  source: EventSource;
-  actor?: string | null;
-}
 
 /**
  * Every mutation appends to the event log in the same transaction that touches

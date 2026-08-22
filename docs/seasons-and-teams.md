@@ -1,8 +1,8 @@
 # Seasons and teams — the model
 
-Status: **steps 1–4 shipped** (seasons as a real entity, the season roster,
-player-side season scoping, and backfill/amend — items 13–16). Steps 5–7 (the
-teams arc) are still proposal. Written before code so the arguments happen here rather than in
+Status: **steps 1–5 shipped** (seasons, the roster, player-side scoping,
+backfill/amend, and teams admin-side — items 13–17). Steps 6–7 are still
+proposal. Written before code so the arguments happen here rather than in
 a diff.
 
 ## What this changes about the one idea
@@ -523,8 +523,9 @@ Each step leaves the app working.
    cache, appends an amendment plus a correction, leaves `raceFinished`
    untouched), the backfill form on the season page, the amend control on the
    results view, and `prune-orphan-races`.
-5. **Teams, admin side** — `teamConfig`, palette, create/assign, the colour
-   claim map.
+5. ~~**Teams, admin side**~~ — **done.** `teamConfig` written by dot path,
+   `DEFAULT_TEAM_PALETTE`, `lib/teams.ts` with both denormalized invariants,
+   the slot grid, and smoke coverage for both concurrency races.
 6. **Teams, player side** — join/leave/rename in My racer and
    `/season/:id/teams`.
 7. **Standings rebuild** — `computeTeamStandings` and the two-table view with

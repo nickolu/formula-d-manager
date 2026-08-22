@@ -28,7 +28,7 @@ fields exist.
 | 14 | 14 | The season roster | **done** | 13 |
 | 15 | 15 | Player-side season scoping + season claim | **done** | 13, 14 |
 | 16 | 16 | Backfill and amend a race | **done** | 13, 14 |
-| 17 | 17 | Teams, admin side | `todo` | 13, 14 |
+| 17 | 17 | Teams, admin side | **done** | 13, 14 |
 | 18 | 18 | Teams, player side | `todo` | 17 |
 | 19 | 19 | Standings: drivers and constructors | `todo` | 14, 17 |
 

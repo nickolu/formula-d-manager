@@ -355,6 +355,78 @@ transaction, because the web SDK cannot query a collection inside one.
 holds there too, and a live orphan is reported and left alone. A one-time script
 rather than a button, so that rule never acquires a back door.
 
+## Teams
+
+Two house rules shape this, and both **delete mechanism rather than adding it**.
+Do not build for the cases they forbid.
+
+**Every team is the same size**, and **nobody switches teams during a season.**
+The second one is load-bearing: with no transfers there is nothing for a
+`result.teams` snapshot to protect against, so `finishRace` and `RaceResult` are
+untouched by the entire teams arc and team points are attributed by *current*
+membership. The interesting consequence is what happens when someone does get
+moved — under this rule that is not a transfer, it is a **correction of a
+recording error**: the player was always on that team and it was written down
+wrong. Re-deriving the whole season's team standings is then exactly the right
+behaviour, and the thing that would be a hazard in a transfer model is the
+desired outcome here. The trail of who moved and when lives in the season log,
+which is the only place it lives at all.
+
+**Equal sizes are not enforced in `lib/`, deliberately.** It is a season-wide
+invariant, so a transaction cannot check it without a query — and enforcing it
+would block creating the third team until the first two are full, which is
+hostile during the ten minutes a league gets set up in. So the admin path
+(`assignToTeam`) may overfill a team while the player path (`joinTeam`) is
+capacity-checked, and the admin view *flags* an uneven team and a roster that
+does not divide by `teamSize`. Lowering `teamSize` below an existing team's size
+is allowed and kicks nobody: it blocks new joins and leaves everyone where they
+are. Removing someone from their team because a setting changed is the sort of
+thing that ends a game night.
+
+**Two invariants are denormalized, because the web SDK cannot query inside a
+transaction** — the `claimRacer` problem again:
+
+- `teams/{id}.members` is the **capacity** authority: "is there an open slot" is
+  `members.length < teamSize`, from one document read.
+- `members/{playerId}.teamId` is the **exclusivity** authority: "am I already on
+  a team" is one field, from one document read.
+
+`joinTeam` reads both, checks both, writes both, in one transaction, so neither
+can be violated by two phones tapping at once. `leaveTeam` finds the team from
+the member document — that is what the exclusivity mirror is *for* — and
+tolerates a team that has already been deleted.
+
+**Colour uniqueness** spans every team in the season, so the answer lives in
+`seasons/{id}.teamColors` — a map from colour key to team id, on the one
+document every colour-changing transaction already reads. Written by **dot
+path**, never whole: writing it whole would clobber a colour claimed a second
+earlier, exactly the reason race settings toggles are written by dot path.
+Released with `deleteField()`. The picker reads it from a document it is already
+streaming, so taken colours grey out with no extra listener — greyed rather than
+hidden, because seeing that Ferrari is spoken for is information. The
+consequence is that **a palette colour a team is wearing cannot be removed**;
+`updateTeamConfig` refuses it and the palette editor greys the ×.
+
+`teamConfig` follows the `scoringConfig` and car-status precedent exactly:
+Firestore, not code; **absent means off**; existing seasons untouched; no deploy
+to change a house variant. `teamConfigFor` is the one place absence is resolved,
+so a season switched on before a palette was written gets the house palette
+rather than an empty picker. `teamConfig.scoring` stays even though with equal
+full teams `average` is `sum ÷ teamSize` — a monotone transform with an
+identical ranking. One field and one branch, and the only case where it matters
+is the one the house rule forbids and somebody will eventually allow.
+
+`playerManaged` is **a mode, not a permission.** There is no auth to enforce one
+with, the same honesty as `/admin` not being hidden. What `lib/` enforces is the
+soft check that actually works at a table: a player may edit the team they are
+on. Say so wherever it is read, so nobody later mistakes it for security.
+
+The admin assigns through a **slot grid** — one card per team showing `teamSize`
+slots, an empty slot tapping to a picker of unassigned members. Not a dropdown
+per player: with teams of two and a known roster it is a handful of taps, and an
+uneven team or a leftover player is visible at a glance in a way a dropdown
+never is.
+
 **Firestore rules do not inherit into subcollections.** `match /seasons/{id}`
 covers the season document and nothing under it, and a missing nested match is
 a silent permission denial at the table, not a build error. So `events`
@@ -664,8 +736,11 @@ nudging, per-car laps, manual correction.
   - **Done:** backfill a race the app never timed, and amend a finished one —
     plus `npm run prune-orphan-races` for races pointing at a season that isn't
     there.
-  - **Next:** teams — admin side, then player side, then the two-table
-    standings rebuild. The arc is laid out in `docs/seasons-and-teams.md`.
+  - **Done:** teams, admin side — `teamConfig` in Firestore, the palette and its
+    colour-claim map, the slot grid, and both denormalized invariants with
+    concurrency covered by the smoke test.
+  - **Next:** teams on a player's phone, then the two-table standings rebuild.
+    The arc is laid out in `docs/seasons-and-teams.md`.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
     rules tighten — right now any signed-in caller can write anything, which
     suits a living room and not a public site. Decided: **Google sign-in**, with

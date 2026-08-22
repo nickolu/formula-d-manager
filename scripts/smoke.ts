@@ -57,11 +57,23 @@ import {
   releaseSeasonRacer,
   removeSeasonMember,
   seasonDoc,
+  updateTeamConfig,
   seasonEventsCol,
   seasonMemberDoc,
   updateSeason,
 } from "../lib/seasons";
 import { backfillRace, createRace, DEFAULT_CAR_STATUS_SPEC } from "../lib/setup";
+import {
+  assignToTeam,
+  createTeam,
+  DEFAULT_TEAM_CONFIG,
+  deleteTeam,
+  joinTeam,
+  leaveTeam,
+  recolourTeam,
+  renameTeam,
+  teamDoc,
+} from "../lib/teams";
 import { readTimer } from "../lib/timer";
 import type {
   LiveState,
@@ -70,6 +82,7 @@ import type {
   RaceEvent,
   Season,
   SeasonEvent,
+  Team,
 } from "../lib/types";
 
 /** The race's configured turn length — what a rewind must reset the clock to. */
@@ -1022,6 +1035,162 @@ async function main() {
     "...and allowed again once no race is running",
     !(await getDoc(seasonMemberDoc(seasonId, foxtrot))).exists(),
   );
+
+  console.log("\nteams — two invariants Firestore cannot query for:");
+  await updateTeamConfig(
+    seasonId,
+    { ...DEFAULT_TEAM_CONFIG, enabled: true, teamSize: 2 },
+    { source: "manual" },
+  );
+  const withTeams = (await getDoc(seasonDoc(seasonId))).data() as Season;
+  check("teams can be switched on", withTeams.teamConfig?.enabled === true);
+  check(
+    "switching on writes a usable config, not a lone flag",
+    (withTeams.teamConfig?.palette?.length ?? 0) > 0,
+  );
+
+  const teamA = await createTeam(seasonId, "Smoke Red", "ferrari", {
+    source: "manual",
+  });
+  check(
+    "the colour is claimed on the season doc",
+    ((await getDoc(seasonDoc(seasonId))).data() as Season).teamColors?.ferrari ===
+      teamA,
+  );
+  await rejects(
+    () => createTeam(seasonId, "Smoke Red II", "ferrari", { source: "manual" }),
+    "a second team cannot take a claimed colour",
+  );
+  await rejects(
+    () => createTeam(seasonId, "Smoke Nope", "not-a-colour", { source: "manual" }),
+    "a colour outside the palette is refused",
+  );
+
+  const teamB = await createTeam(seasonId, "Smoke Blue", "mercedes", {
+    source: "manual",
+  });
+
+  // The whole reason the colour map is denormalized onto the season document:
+  // two phones picking the same colour at the same moment.
+  const colourRace = await Promise.allSettled([
+    recolourTeam(seasonId, teamA, "redbull", { source: "manual" }),
+    recolourTeam(seasonId, teamB, "redbull", { source: "manual" }),
+  ]);
+  check(
+    "two concurrent colour claims: exactly one wins",
+    colourRace.filter((r) => r.status === "fulfilled").length === 1,
+    colourRace.map((r) => r.status).join(","),
+  );
+  const afterColourRace = (await getDoc(seasonDoc(seasonId))).data() as Season;
+  check(
+    "the loser's old colour is not left claimed by nobody",
+    Object.keys(afterColourRace.teamColors ?? {}).length === 2,
+    JSON.stringify(afterColourRace.teamColors),
+  );
+
+  await rejects(
+    () =>
+      updateTeamConfig(
+        seasonId,
+        { palette: DEFAULT_TEAM_CONFIG.palette.filter((c) => c.key !== "redbull") },
+        { source: "manual" },
+      ),
+    "a palette colour a team is wearing cannot be removed",
+  );
+
+  await renameTeam(seasonId, teamA, "Smoke Scarlet", { source: "manual" });
+  check(
+    "a team can be renamed",
+    ((await getDoc(teamDoc(seasonId, teamA))).data() as Team).name ===
+      "Smoke Scarlet",
+  );
+
+  // The other denormalized invariant: capacity lives on the team document so a
+  // transaction can read it, and exclusivity lives on the member document.
+  await addSeasonMember(seasonId, "Hotel", { source: "manual" });
+  await addSeasonMember(seasonId, "India", { source: "manual" });
+  await addSeasonMember(seasonId, "Juliet", { source: "manual" });
+  await joinTeam(seasonId, teamA, "hotel", { source: "manual" });
+  check(
+    "membership is written twice — the team's array",
+    ((await getDoc(teamDoc(seasonId, teamA))).data() as Team).members.join(",") ===
+      "hotel",
+  );
+  check(
+    "...and the member's teamId",
+    (await getDoc(seasonMemberDoc(seasonId, "hotel"))).data()?.teamId === teamA,
+  );
+  await rejects(
+    () => joinTeam(seasonId, teamB, "hotel", { source: "manual" }),
+    "a racer cannot be on two teams",
+  );
+
+  const slotRace = await Promise.allSettled([
+    joinTeam(seasonId, teamA, "india", { source: "manual" }),
+    joinTeam(seasonId, teamA, "juliet", { source: "manual" }),
+  ]);
+  check(
+    "two concurrent joins to the last slot: exactly one wins",
+    slotRace.filter((r) => r.status === "fulfilled").length === 1,
+    slotRace.map((r) => r.status).join(","),
+  );
+  check(
+    "the team is not overfilled",
+    ((await getDoc(teamDoc(seasonId, teamA))).data() as Team).members.length === 2,
+  );
+
+  // The admin path shares the invariants but is allowed to make an uneven team.
+  const leftover = (await getDoc(seasonMemberDoc(seasonId, "india"))).data()
+    ?.teamId
+    ? "juliet"
+    : "india";
+  await assignToTeam(seasonId, teamA, leftover, { source: "manual" });
+  check(
+    "the admin may overfill a team — equal sizes are a house rule, not a check",
+    ((await getDoc(teamDoc(seasonId, teamA))).data() as Team).members.length === 3,
+  );
+
+  // Shrinking teamSize must not kick anyone out.
+  await updateTeamConfig(seasonId, { teamSize: 1 }, { source: "manual" });
+  check(
+    "lowering team size kicks nobody",
+    ((await getDoc(teamDoc(seasonId, teamA))).data() as Team).members.length === 3,
+  );
+  await updateTeamConfig(seasonId, { teamSize: 2 }, { source: "manual" });
+
+  await leaveTeam(seasonId, "hotel", { source: "manual" });
+  check(
+    "leaving clears both halves",
+    !((await getDoc(teamDoc(seasonId, teamA))).data() as Team).members.includes(
+      "hotel",
+    ) && (await getDoc(seasonMemberDoc(seasonId, "hotel"))).data()?.teamId === null,
+  );
+
+  const teamAColour = ((await getDoc(teamDoc(seasonId, teamA))).data() as Team)
+    .colorKey;
+  await deleteTeam(seasonId, teamA, { source: "manual" });
+  check(
+    "deleting a team frees its colour",
+    ((await getDoc(seasonDoc(seasonId))).data() as Season).teamColors?.[
+      teamAColour
+    ] === undefined,
+  );
+  check(
+    "...and clears its members' teamId",
+    (await getDoc(seasonMemberDoc(seasonId, leftover))).data()?.teamId === null,
+  );
+  const seasonTypes = await seasonEventTypes(seasonId);
+  check(
+    "every team change is logged",
+    ["teamCreated", "teamRenamed", "teamRecoloured", "teamJoined", "teamLeft", "teamDeleted"].every(
+      (t) => seasonTypes.includes(t),
+    ),
+    seasonTypes.filter((t) => t.startsWith("team")).join(","),
+  );
+  await deleteTeam(seasonId, teamB, { source: "manual" });
+  for (const id of ["hotel", "india", "juliet"]) {
+    await removeSeasonMember(seasonId, id, { source: "manual" });
+  }
 
   console.log("\nbackfilling a race the app never timed:");
   const runOn = new Date(2020, 4, 17);
