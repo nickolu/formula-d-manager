@@ -149,17 +149,39 @@ it already exists so it can never clobber a scoring table tuned in the console.
   House rules churn; changing them must not require a deploy.
 - Every event carries `source: "manual" | "chat" | "system"` so chat-entered
   mistakes stay traceable.
-- The three race screens are `/race/:id/device` (the tablet), `/race/:id/screen`
-  (the big screen) and `/race/:id/edit` (corrections). The old `/table` and
-  `/entry` paths permanently redirect, because the tablets had them bookmarked.
+- The three race screens are `/race/:id/player` (what a player looks at, on a
+  phone or the shared tablet), `/race/:id/screen` (the big screen) and
+  `/race/:id/results` (corrections and finishing). Each has been renamed twice —
+  `table` → `device` → `player`, `entry` → `edit` → `results` — and every
+  historical path redirects **straight to the current one**, never chaining
+  through the intermediate name: the tablets have old URLs bookmarked and a
+  second round trip on house wifi buys nothing.
 - `app/Nav.tsx` is opt-in per page, **not** rendered from `layout.tsx`. The big
   screen is read from across a room and the tablet's buttons are sized for a
   thumb at arm's length; neither wants nav chrome, and the layout would give
   both one.
-- Drag-to-reorder (`app/ReorderableList.tsx`) is built on pointer events, not
-  HTML5 drag-and-drop. Native drag events never fire on touch, so `draggable`
-  would silently do nothing on the tablet — the one screen it's for. The ↑/↓
-  buttons stay as a fallback.
+- Drag-to-reorder is built on pointer events, not HTML5 drag-and-drop. Native
+  drag events never fire on touch, so `draggable` would silently do nothing on
+  the phones and tablet this is for. The mechanics live in
+  `app/useDragOrder.ts` and are shared by `app/ReorderableList.tsx` and the
+  track view; the ↑/↓ buttons stay as a fallback.
+- The player view renders standings two ways — `list` or `track` — chosen by a
+  toggle and remembered per device in `localStorage` (key
+  `formulad:standingsMode`, deliberately unchanged across the renames so no
+  tablet silently loses its preference), read through
+  `useSyncExternalStore` so SSR and hydration agree without an effect.
+  `TrackView` draws `positionOrder` as cars on a strip of asphalt travelling up
+  the screen, leader nearest the flag. **It is a second rendering, not a second
+  source of truth**: cars are evenly spaced because the app models no board
+  state, so a car's real location is unknowable and nothing on that screen
+  claims otherwise. The only other axis drawn is laps, which is real data.
+  Dragging a car emits the same `setPositionOrder` mutation the list does.
+- Car identity (`lib/cars.ts`) is **derived, not stored** — a 1–2 character
+  label from the display name and a colour from a hash of the player id, both
+  assigned over the ids *sorted* so nothing reshuffles when someone overtakes.
+  Storing `carLabel`/`carColour` on the player would mean a setup screen and a
+  migration, and two cars could still collide; `assignCars` guarantees
+  uniqueness within a race instead. Pure, like `lib/scoring.ts`.
 
 ## Verification
 
@@ -197,6 +219,9 @@ nudging, per-car laps, manual correction.
   - **Done:** UI pass over the two interactive screens — drag-to-reorder
     standings, mid-race retirement that skips a car's turns, a reverse gear for
     a mis-tapped turn, and global nav. `table`/`entry` became `device`/`edit`.
+  - **Done:** optional track visualisation on the player view — cars drawn
+    top-down travelling up the screen, drag to reorder, tap a name for lap and
+    DNF. Order-only by design; the no-board-state rule stands.
   - **Next:** race history and player pages (both are views over the same
     `result` data), then post-game review to confirm the finishing order before
     a race is sealed.

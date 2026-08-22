@@ -22,14 +22,14 @@ export default function RaceList() {
               <span className="ml-2 text-sm text-neutral-500">{race.status}</span>
             </span>
             <span className="flex gap-4 text-sm">
-              <Link href={`/race/${race.id}/device`} className="text-emerald-500">
-                device
+              <Link href={`/race/${race.id}/player`} className="text-emerald-500">
+                player
               </Link>
               <Link href={`/race/${race.id}/screen`} className="text-emerald-500">
                 screen
               </Link>
-              <Link href={`/race/${race.id}/edit`} className="text-emerald-500">
-                edit
+              <Link href={`/race/${race.id}/results`} className="text-emerald-500">
+                results
               </Link>
             </span>
           </li>

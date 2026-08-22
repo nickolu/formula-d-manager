@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useLiveState, useNow, useParticipants, usePlayers } from "@/lib/hooks";
 import {
   advanceTurn,
@@ -14,14 +14,45 @@ import {
 import { formatRemaining, readTimer } from "@/lib/timer";
 import ReorderableList from "@/app/ReorderableList";
 import StaleRace from "@/app/StaleRace";
+import TrackView from "./TrackView";
 
-export default function DeviceView({ raceId }: { raceId: string }) {
+type StandingsMode = "list" | "track";
+const MODE_KEY = "formulad:standingsMode";
+
+/**
+ * Which rendering the tablet last used, remembered per device.
+ *
+ * localStorage is an external store, so it is read through
+ * useSyncExternalStore rather than an effect: the server snapshot is "list",
+ * which is what SSR renders, and the client swaps to the stored value during
+ * hydration without a cascading re-render or a mismatch.
+ */
+let modeListeners: (() => void)[] = [];
+
+function subscribeMode(cb: () => void) {
+  modeListeners.push(cb);
+  return () => {
+    modeListeners = modeListeners.filter((l) => l !== cb);
+  };
+}
+
+function readMode(): StandingsMode {
+  return localStorage.getItem(MODE_KEY) === "track" ? "track" : "list";
+}
+
+function writeMode(next: StandingsMode) {
+  localStorage.setItem(MODE_KEY, next);
+  modeListeners.forEach((l) => l());
+}
+
+export default function PlayerView({ raceId }: { raceId: string }) {
   const { live, loading, error } = useLiveState(raceId);
   const players = usePlayers();
   const participants = useParticipants(raceId);
   const now = useNow();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const mode = useSyncExternalStore(subscribeMode, readMode, () => "list");
 
   const timer = readTimer(live, now);
   const nameOf = (id: string) => players.get(id)?.displayName ?? id;
@@ -107,9 +138,47 @@ export default function DeviceView({ raceId }: { raceId: string }) {
       </div>
 
       <section>
-        <h2 className="mb-2 text-xs uppercase tracking-widest text-neutral-500">
-          Standings — drag to reorder when someone overtakes
-        </h2>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h2 className="text-xs uppercase tracking-widest text-neutral-500">
+            Standings — drag to reorder when someone overtakes
+          </h2>
+          {/* Both modes are the same data and the same mutation; this only
+              changes how it is drawn. */}
+          <div className="flex shrink-0 overflow-hidden rounded-full border border-neutral-700 text-xs">
+            {(["list", "track"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => writeMode(m)}
+                aria-pressed={mode === m}
+                className={`px-3 py-1.5 capitalize ${
+                  mode === m
+                    ? "bg-neutral-700 text-white"
+                    : "text-neutral-400"
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {mode === "track" ? (
+          <TrackView
+            live={live}
+            players={players}
+            participants={participants}
+            disabled={busy}
+            onReorder={(next) =>
+              run(() => setPositionOrder(raceId, next, { source: "manual" }))
+            }
+            onCompleteLap={(id) =>
+              run(() => completeLap(raceId, id, { source: "manual" }))
+            }
+            onToggleDnf={(id, dnf) =>
+              run(() => setDnf(raceId, id, dnf, { source: "manual" }))
+            }
+          />
+        ) : (
         <ReorderableList
           items={live.positionOrder}
           disabled={busy}
@@ -185,6 +254,7 @@ export default function DeviceView({ raceId }: { raceId: string }) {
             );
           }}
         />
+        )}
       </section>
 
       <button

@@ -19,7 +19,7 @@ import StaleRace from "@/app/StaleRace";
  * emits these same mutations rather than writing documents itself, so anything
  * it gets wrong is fixable here.
  */
-export default function EditView({ raceId }: { raceId: string }) {
+export default function ResultsView({ raceId }: { raceId: string }) {
   const { live, loading } = useLiveState(raceId);
   const players = usePlayers();
   const participants = useParticipants(raceId);
@@ -32,7 +32,7 @@ export default function EditView({ raceId }: { raceId: string }) {
   const [draft, setDraft] = useState<PlayerId[] | null>(null);
   const order = draft ?? live?.positionOrder ?? [];
 
-  // Retirement is live state now, not a local checkbox: the device view and
+  // Retirement is live state now, not a local checkbox: the player view and
   // this one read the same list and cannot disagree about who is out.
   const retired = new Set(live?.retired ?? []);
 

@@ -24,7 +24,7 @@ export default function NewRaceForm() {
         turnSeconds,
         playerNames: names.split("\n"),
       });
-      router.push(`/race/${raceId}/device`);
+      router.push(`/race/${raceId}/player`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
