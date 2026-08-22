@@ -156,6 +156,18 @@ it already exists so it can never clobber a scoring table tuned in the console.
   historical path redirects **straight to the current one**, never chaining
   through the intermediate name: the tablets have old URLs bookmarked and a
   second round trip on house wifi buys nothing.
+- **`/` belongs to players; `/admin` is the commissioner's.** The root page is
+  a list of races — tap one, land on `/race/:id/player` — so the site root is
+  the only URL anyone has to know and it never changes between game nights.
+  Everything the root used to do (new-race form, per-view links) moved to
+  `/admin`, reachable only from `Nav.tsx`; nothing hides it, because there is
+  no auth to hide it behind yet and pretending otherwise would be theatre.
+  `app/RaceList.tsx` renders both with a `variant` prop rather than forking —
+  the listener, ordering and empty state are shared and two copies would drift.
+  The landing groups live races above a collapsed "Past races", and
+  deliberately **does not auto-redirect when exactly one race is live**: it
+  would save a tap at the cost of the root behaving differently week to week,
+  and it would strand anyone trying to reach a finished race.
 - `app/Nav.tsx` is opt-in per page, **not** rendered from `layout.tsx`. The big
   screen is read from across a room and the tablet's buttons are sized for a
   thumb at arm's length; neither wants nav chrome, and the layout would give
@@ -222,6 +234,8 @@ nudging, per-car laps, manual correction.
   - **Done:** optional track visualisation on the player view — cars drawn
     top-down travelling up the screen, drag to reorder, tap a name for lap and
     DNF. Order-only by design; the no-board-state rule stands.
+  - **Done:** the renames — `device` → `player`, `edit` → `results` — and the
+    root split: `/` is the player landing, `/admin` is the commissioner's.
   - **Next:** race history and player pages (both are views over the same
     `result` data), then post-game review to confirm the finishing order before
     a race is sealed.

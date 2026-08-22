@@ -35,7 +35,10 @@ firebase apps:sdkconfig WEB
 Older bookmarks still work: `/table` and `/device` redirect to `/player`,
 `/entry` and `/edit` to `/results`.
 
-Create a race from `/`, enter players in starting grid order, then open the
+`/` is the player landing — a list of races, tap one to land in it. That is the
+only URL anyone needs. The commissioner's tools live at `/admin`.
+
+Create a race from `/admin`, enter players in starting grid order, then open the
 player and screen views on separate devices.
 
 During play:

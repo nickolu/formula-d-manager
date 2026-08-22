@@ -81,18 +81,30 @@ export function useParticipants(raceId: string) {
   return participants;
 }
 
-export function useRaces() {
+/**
+ * The races listener, with the first-snapshot flag exposed. The landing page
+ * needs it: races start as an empty array, so without it a player arriving on
+ * a slow connection reads "no race yet" for a moment before their race appears
+ * — which is exactly the wrong thing to tell someone who came to play.
+ */
+export function useRaceList() {
   const [races, setRaces] = useState<Race[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const q = query(collection(db, "races"), orderBy("scheduledAt", "desc"));
     const unsubscribe = onSnapshot(q, (snap) => {
       setRaces(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Race));
+      setLoading(false);
     });
     return unsubscribe;
   }, []);
 
-  return races;
+  return { races, loading };
+}
+
+export function useRaces() {
+  return useRaceList().races;
 }
 
 /**

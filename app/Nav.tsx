@@ -14,6 +14,9 @@ export default function Nav({ raceId }: { raceId?: string }) {
       </Link>
       <span className="flex gap-4 text-sm text-emerald-500">
         <Link href="/standings">standings</Link>
+        {/* The only way to find /admin. Nothing hides it — there is no auth to
+            hide it behind yet. */}
+        <Link href="/admin">admin</Link>
         {raceId && (
           <>
             <Link href={`/race/${raceId}/player`}>player</Link>

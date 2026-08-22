@@ -14,7 +14,7 @@ fields exist.
 | — | 1 | Drag-to-reorder, mobile-first | **done** | — |
 | 1 | 2 | Rename device → player | **done** | — |
 | 2 | 5 | Rename edit → results | **done** | — |
-| 3 | 12 | Player landing + `/admin` split | todo | 2 |
+| 3 | 12 | Player landing + `/admin` split | **done** | 2 |
 | 4 | 3 | Player view IA + history subview | todo | 2 |
 | 5 | 4 | Go back a turn (reset + auto-pause) | todo | — |
 | 6 | 6 | Race settings view | todo | 3, 4 |
