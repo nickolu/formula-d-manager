@@ -94,10 +94,19 @@ const TURN_SECONDS = 90;
 const TURN_MS = TURN_SECONDS * 1000;
 
 let failures = 0;
+/**
+ * Kept so the summary can name what failed. A run that scrolls past 200 lines
+ * and ends in "2 CHECK(S) FAILED" is not diagnosable, and an intermittent
+ * failure is exactly the one you cannot reproduce to go looking for.
+ */
+const failed: string[] = [];
 
 function check(label: string, ok: boolean, detail = "") {
   console.log(`${ok ? "  ok  " : "FAIL  "}${label}${detail ? ` — ${detail}` : ""}`);
-  if (!ok) failures++;
+  if (!ok) {
+    failures++;
+    failed.push(`${label}${detail ? ` — ${detail}` : ""}`);
+  }
 }
 
 /** Asserts that a guard actually fires, rather than silently writing bad data. */
@@ -1466,6 +1475,7 @@ async function main() {
   );
 
   console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}`);
+  for (const label of failed) console.log(`  FAIL  ${label}`);
   process.exit(failures === 0 ? 0 : 1);
 }
 
