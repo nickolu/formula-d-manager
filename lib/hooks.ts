@@ -285,11 +285,14 @@ export function useCurrentSeason() {
  * Someone missing a game night stays a member — which is why they still appear
  * in standings, on zero, rather than being written into a race they did not run.
  */
-export function useSeasonMembers(seasonId: string) {
+export function useSeasonMembers(seasonId: string | null | undefined) {
   const [members, setMembers] = useState<SeasonMember[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // A caller that does not know its season yet passes nothing rather than an
+    // empty id, which Firestore rejects as a collection path.
+    if (!seasonId) return;
     const unsubscribe = onSnapshot(seasonMembersCol(seasonId), (snap) => {
       setMembers(snap.docs.map((d) => d.data() as SeasonMember));
       setLoading(false);

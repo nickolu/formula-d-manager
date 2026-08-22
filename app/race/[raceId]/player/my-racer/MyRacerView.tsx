@@ -7,6 +7,7 @@ import {
   useParticipants,
   usePlayers,
   useRace,
+  useSeasonMembers,
   useUid,
 } from "@/lib/hooks";
 import {
@@ -40,6 +41,7 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
   const { race } = useRace(raceId);
   const participants = useParticipants(raceId);
   const players = usePlayers();
+  const { members } = useSeasonMembers(race?.seasonId);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -106,9 +108,34 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
   const nameOf = (id: PlayerId) => players.get(id)?.displayName ?? id;
 
   // Old races have no claimedBy anywhere, so everything is simply unclaimed.
-  const mine = uid
+  const claimedHere = uid
     ? order.find((id) => participants.get(id)?.claimedBy === uid)
     : undefined;
+
+  /**
+   * The racer this device holds for the season, used only when nothing is
+   * claimed in this race.
+   *
+   * `createRace` and `joinRace` seed the participant from the season claim, but
+   * a race that already existed when you picked has nothing seeded — and this
+   * screen would then ask you to pick again, which is exactly the thing picking
+   * at the season level was supposed to stop.
+   *
+   * Derived, not written: nothing claims on render. And only when that
+   * participant is **unclaimed here** — if another phone has taken them in this
+   * race, the in-race claim wins, which is the whole point of it being
+   * authoritative and re-tappable.
+   */
+  const seasonRacer = uid
+    ? (members.find((m) => m.claimedBy === uid)?.playerId ?? null)
+    : null;
+  const mine =
+    claimedHere ??
+    (seasonRacer &&
+    order.includes(seasonRacer) &&
+    !participants.get(seasonRacer)?.claimedBy
+      ? seasonRacer
+      : undefined);
 
   // `enabled` is the only switch. The spec falls back to the default, because a
   // race created before the card existed has none — switching it on would

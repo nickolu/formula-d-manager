@@ -531,6 +531,15 @@ it lists every race, which is what `/` wants.
   `createRace` and `joinRace` seed from it. Typing your own name there joins the
   league *and* claims you in one act — nobody types their name in to then watch
   someone else take it.
+- **The in-race "my racer" falls back to the season claim.** `createRace` and
+  `joinRace` seed `participants/{id}.claimedBy` from it, but a race that already
+  existed when you picked has nothing seeded — and that screen would then ask
+  you to pick again, which is what picking at the season level exists to stop.
+  So the derivation is: the participant claimed by this uid, or else the racer
+  this uid holds for the season **provided that participant is unclaimed here**.
+  If another phone has taken them in this race, the in-race claim wins — that is
+  the whole point of it being authoritative and re-tappable. Still derived,
+  never stored, and nothing claims on render.
 - **Teams is deliberately not a season tab.** The panel has to know who you are,
   which is the claim, so it sits below the racer on that same screen — a Team
   tab would open on "pick your racer first", which is the Racer screen with

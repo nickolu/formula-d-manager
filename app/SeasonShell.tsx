@@ -34,7 +34,7 @@ export default function SeasonShell({
 
   return (
     <main className="mx-auto w-full max-w-2xl p-5">
-      <Nav />
+      <Nav standings={false} />
       <h1 className="text-3xl font-semibold">Formula D</h1>
       <SeasonHeader season={season} />
       {id && <SeasonTabs seasonId={id} racesHref={seasonId ? `/season/${id}` : "/"} />}
