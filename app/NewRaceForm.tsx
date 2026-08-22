@@ -4,7 +4,13 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { createRace } from "@/lib/setup";
 
-export default function NewRaceForm() {
+/**
+ * Scoped to a season, because a race must belong to one — createRace verifies
+ * the id rather than defaulting it. The form lives on the season's admin page
+ * for exactly that reason: there is no such thing as a race with no season to
+ * put it in.
+ */
+export default function NewRaceForm({ seasonId }: { seasonId: string }) {
   const router = useRouter();
   const [track, setTrack] = useState("");
   const [lapCount, setLapCount] = useState(2);
@@ -23,6 +29,7 @@ export default function NewRaceForm() {
         lapCount,
         turnSeconds,
         playerNames: names.split("\n"),
+        seasonId,
       });
       router.push(`/race/${raceId}/player`);
     } catch (err) {

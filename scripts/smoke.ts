@@ -46,10 +46,17 @@ import {
   updateRaceSettings,
 } from "../lib/race";
 import { computeStandings, pointsFor } from "../lib/scoring";
-import { DEFAULT_SCORING } from "../lib/seasons";
+import {
+  createSeason,
+  DEFAULT_SCORING,
+  deleteSeason,
+  seasonDoc,
+  seasonEventsCol,
+  updateSeason,
+} from "../lib/seasons";
 import { createRace, DEFAULT_CAR_STATUS_SPEC } from "../lib/setup";
 import { readTimer } from "../lib/timer";
-import type { LiveState, Participant, Race } from "../lib/types";
+import type { LiveState, Participant, Race, Season, SeasonEvent } from "../lib/types";
 
 /** The race's configured turn length — what a rewind must reset the clock to. */
 const TURN_SECONDS = 90;
@@ -108,9 +115,96 @@ async function laps(raceId: string) {
   );
 }
 
+async function seasonEvents(seasonId: string): Promise<SeasonEvent[]> {
+  const snap = await getDocs(seasonEventsCol(seasonId));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as SeasonEvent);
+}
+
+async function seasonEventTypes(seasonId: string): Promise<string[]> {
+  return (await seasonEvents(seasonId)).map((e) => e.type);
+}
+
 async function main() {
   await signInAnonymously(getAuth(app));
   console.log("signed in anonymously\n");
+
+  console.log("the season a race lives in:");
+  const seasonId = await createSeason(
+    { name: "SMOKE-TEST season" },
+    { source: "manual" },
+  );
+  const seededSeason = (await getDoc(seasonDoc(seasonId))).data() as Season;
+  check("the season document exists", !!seededSeason);
+  check(
+    "it starts from the house scoring table",
+    seededSeason.scoringConfig.positionPoints.join(",") ===
+      DEFAULT_SCORING.positionPoints.join(","),
+  );
+  check("a new season is active", seededSeason.archived === undefined);
+  check(
+    "creating a season seeds its log",
+    (await seasonEventTypes(seasonId)).includes("seasonCreated"),
+  );
+  await rejects(
+    () => createSeason({ name: "   " }, { source: "manual" }),
+    "a season with no name is refused",
+  );
+  await rejects(
+    () =>
+      createSeason(
+        {
+          name: "SMOKE-TEST bad scoring",
+          scoringConfig: { positionPoints: [], pointsBeyondTable: 0, dnfPoints: 0 },
+        },
+        { source: "manual" },
+      ),
+    "a scoring table with no points at all is refused",
+  );
+
+  await updateSeason(seasonId, { name: "SMOKE-TEST season 2" }, { source: "manual" });
+  const renamed = (await getDoc(seasonDoc(seasonId))).data() as Season;
+  check("a season can be renamed", renamed.name === "SMOKE-TEST season 2", renamed.name);
+  const renameEvent = (await seasonEvents(seasonId)).find(
+    (e) => e.type === "seasonSettingsChanged",
+  );
+  check(
+    "the settings event carries only what changed",
+    renameEvent?.type === "seasonSettingsChanged" &&
+      Object.keys(renameEvent.patch).join(",") === "name",
+    renameEvent?.type === "seasonSettingsChanged"
+      ? Object.keys(renameEvent.patch).join(",")
+      : "none",
+  );
+  await updateSeason(seasonId, { archived: true }, { source: "manual" });
+  check(
+    "a season can be archived",
+    ((await getDoc(seasonDoc(seasonId))).data() as Season).archived === true,
+  );
+  await updateSeason(seasonId, { archived: false }, { source: "manual" });
+  check(
+    "and reopened",
+    ((await getDoc(seasonDoc(seasonId))).data() as Season).archived === false,
+  );
+  await rejects(
+    () => updateSeason(seasonId, { name: "  " }, { source: "manual" }),
+    "renaming a season to nothing is refused",
+  );
+  await rejects(
+    () => updateSeason("no-such-season", { name: "x" }, { source: "manual" }),
+    "editing a season that does not exist is refused",
+  );
+
+  await rejects(
+    () =>
+      createRace({
+        track: "SMOKE-TEST orphan",
+        lapCount: 1,
+        turnSeconds: TURN_SECONDS,
+        playerNames: ["Alpha"],
+        seasonId: "no-such-season",
+      }),
+    "a race in a season that does not exist is refused",
+  );
 
   const raceId = await createRace({
     track: "SMOKE-TEST",
@@ -119,8 +213,17 @@ async function main() {
     // Delta is removed below, before the flag drops — the rest of the run is a
     // three-car race, exactly as it was before the roster was editable.
     playerNames: ["Alpha", "Bravo", "Charlie", "Delta"],
+    seasonId,
   });
-  console.log(`created race ${raceId}\n`);
+  console.log(`\ncreated race ${raceId}\n`);
+  check(
+    "the race belongs to the season",
+    ((await getDoc(doc(db, "races", raceId))).data() as Race).seasonId === seasonId,
+  );
+  await rejects(
+    () => deleteSeason(seasonId),
+    "deleting a season that has races is refused",
+  );
 
   const states: LiveState[] = [];
   const unsubscribe = onSnapshot(liveDoc(raceId), (snap) => {
@@ -681,7 +784,7 @@ async function main() {
   );
 
   console.log("\nstandings derive from the finished race:");
-  const standings = computeStandings([finished], DEFAULT_SCORING, "default");
+  const standings = computeStandings([finished], DEFAULT_SCORING, seasonId);
   const points = new Map(standings.map((s) => [s.playerId, s.points]));
   check(
     "points follow the finishing order",
@@ -720,6 +823,18 @@ async function main() {
   await rejects(
     () => deleteRace(raceId),
     "deleting a race that is already gone is refused",
+  );
+
+  console.log("\ncleaning up the season:");
+  await deleteSeason(seasonId);
+  check("the season document is gone", !(await getDoc(seasonDoc(seasonId))).exists());
+  check(
+    "its log survives, orphaned by design",
+    (await seasonEvents(seasonId)).length > 0,
+  );
+  await rejects(
+    () => deleteSeason(seasonId),
+    "deleting a season that is already gone is refused",
   );
 
   console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}`);

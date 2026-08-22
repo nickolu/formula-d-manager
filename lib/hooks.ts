@@ -1,12 +1,20 @@
 "use client";
 
 import { getAuth, onAuthStateChanged } from "firebase/auth";
-import { collection, doc, limit, onSnapshot, orderBy, query } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  where,
+} from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import { app, db } from "./firebase";
 import { liveDoc } from "./race";
 import { computeStandings } from "./scoring";
-import { seasonDoc } from "./seasons";
+import { seasonDoc, seasonEventsCol, seasonsCol } from "./seasons";
 import type {
   LiveState,
   Participant,
@@ -15,6 +23,7 @@ import type {
   Race,
   RaceEvent,
   Season,
+  SeasonEvent,
 } from "./types";
 
 /**
@@ -89,24 +98,34 @@ export function useParticipants(raceId: string) {
  * a slow connection reads "no race yet" for a moment before their race appears
  * — which is exactly the wrong thing to tell someone who came to play.
  */
-export function useRaceList() {
+export function useRaceList(seasonId?: string) {
   const [races, setRaces] = useState<Race[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const q = query(collection(db, "races"), orderBy("scheduledAt", "desc"));
+    // Scoped when a season is given — which needs the composite index on
+    // (seasonId ASC, scheduledAt DESC) in firestore.indexes.json. Without the
+    // index this fails at the table rather than at build time, which is why
+    // the index ships before anything depends on it.
+    const q = seasonId
+      ? query(
+          collection(db, "races"),
+          where("seasonId", "==", seasonId),
+          orderBy("scheduledAt", "desc"),
+        )
+      : query(collection(db, "races"), orderBy("scheduledAt", "desc"));
     const unsubscribe = onSnapshot(q, (snap) => {
       setRaces(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Race));
       setLoading(false);
     });
     return unsubscribe;
-  }, []);
+  }, [seasonId]);
 
   return { races, loading };
 }
 
-export function useRaces() {
-  return useRaceList().races;
+export function useRaces(seasonId?: string) {
+  return useRaceList(seasonId).races;
 }
 
 /**
@@ -181,11 +200,57 @@ export function useSeason(seasonId: string) {
 }
 
 /**
+ * Every season, newest first. One listener — the league has a handful of these
+ * and they change about once a year.
+ *
+ * Archived seasons are included: a picker filters them out, and a standings
+ * page still has to be able to name the season it is showing.
+ */
+export function useSeasons() {
+  const [seasons, setSeasons] = useState<Season[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const q = query(seasonsCol(), orderBy("startDate", "desc"));
+    const unsubscribe = onSnapshot(q, (snap) => {
+      setSeasons(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Season));
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, []);
+
+  return { seasons, loading };
+}
+
+/**
+ * The season's event log, newest first, shaped exactly like useRaceEvents.
+ *
+ * Nothing renders this yet, on purpose: the log ships before its view because
+ * a team move is otherwise unrecoverable, while the view is cheap to add later.
+ * `at` is null until the server acknowledges, same as every race event.
+ */
+export function useSeasonEvents(seasonId: string, max = 300) {
+  const [events, setEvents] = useState<SeasonEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const q = query(seasonEventsCol(seasonId), orderBy("at", "desc"), limit(max));
+    const unsubscribe = onSnapshot(q, (snap) => {
+      setEvents(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as SeasonEvent));
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, [seasonId, max]);
+
+  return { events, loading };
+}
+
+/**
  * Standings are derived, never stored. Both inputs are already streaming, so
  * this adds no reads and cannot drift from the races it summarizes.
  */
 export function useStandings(seasonId: string) {
-  const races = useRaces();
+  const races = useRaces(seasonId);
   const { season, loading } = useSeason(seasonId);
 
   const standings = useMemo(

@@ -185,6 +185,57 @@ Season docs did not exist through Phase 1 — `createRace` wrote `seasonId:
 "default"` against nothing. `npm run seed-season` creates it, and is a no-op if
 it already exists so it can never clobber a scoring table tuned in the console.
 
+## Seasons
+
+**The season is the unit of identity; a race is a thing that happens inside
+one.** That sentence is the whole of what changed. `createRace` now *requires*
+`seasonId` and verifies the document exists before writing anything — the old
+`?? "default"` made every race silently a member of a season nothing could
+enumerate, and standings are scoped by `seasonId`, so a race pointing at
+nothing scores into nothing. The check is a `getDoc` before the batch rather
+than inside it, because a batch cannot read and an orphaned race is worse than
+a slower create.
+
+`lib/seasons.ts` is `lib/race.ts`'s counterpart, with the same rule: one
+transaction, document write plus event append, never a bare `updateDoc` from a
+component. `updateSeason` carries **only the fields the caller set**, so the log
+reads as a diff — the same shape as `updateRaceSettings`.
+
+**`deleteSeason` refuses a season that has any race.** Cascading would mean
+deleting races, and `deleteRace` already refuses anything not `complete` for
+good reasons; a season delete must not become the back door around that.
+Archiving is the action people actually want when a season ends — it drops out
+of pickers and keeps its standings — so delete exists for the season made by a
+mis-tap. Like `deleteRace` it appends **no event**: there would be nowhere to
+append it to, and the log survives orphaned because the rules forbid deleting
+event documents. It clears `members` and `teams` before the season doc, so a
+failure part-way leaves a findable season rather than orphaned subcollections.
+
+`ensureSeason` is deliberately *not* routed through `createSeason`. It writes a
+known id, is idempotent, and is a migration rather than a mutation — seeding the
+season that Phase 1's races already claimed to be in is not a thing that
+happened at the table, so it appends nothing.
+
+**The season event log ships before its view, on purpose.** Nothing replays it
+the way the race log can be replayed and Phase 3's chatbot does not write to it.
+It earns its place on one narrow ground: a team move re-derives the whole
+season's team standings silently, and this log is the only thing that will
+record the move happened. Unrecoverable after the fact, trivial to write now.
+`SeasonEvent` reuses the race log's `BaseEvent` shape — `at`, `source`, `actor`
+— so "who said so" reads the same whichever log you are in, and one shape means
+one set of rules.
+
+**Firestore rules do not inherit into subcollections.** `match /seasons/{id}`
+covers the season document and nothing under it, and a missing nested match is
+a silent permission denial at the table, not a build error. So `events`
+(append-only, like race events), `members` and `teams` are all declared now,
+ahead of the items that create the last two: rules are one file, and a partial
+ruleset means the next change ships and mysteriously cannot write. The
+`races` composite index on `seasonId ASC, scheduledAt DESC` ships early for the
+same reason — a missing index fails at runtime, so it is created before anything
+depends on it. `useRaceList(seasonId)` is what uses it; called with no argument
+it lists every race, which is what `/` wants.
+
 ## Conventions
 
 - **Next 16:** `params` is a `Promise` and must be awaited. A client component
@@ -206,6 +257,13 @@ it already exists so it can never clobber a scoring table tuned in the console.
   historical path redirects **straight to the current one**, never chaining
   through the intermediate name: the tablets have old URLs bookmarked and a
   second round trip on house wifi buys nothing.
+- **`/admin` is a season layer above the races.** The new-race form used to sit
+  on `/admin` itself; it moved to `/admin/season/:seasonId` because a race must
+  belong to a season that exists, so there is no coherent place to create one
+  outside a season. `/admin` is now the season list plus a New season form, and
+  the season page carries Races, Scoring and Settings — Roster and Teams land
+  there as further sections. `NewRaceForm` and `RaceList` take a `seasonId`
+  rather than being forked, the same reasoning as `RaceList`'s `variant`.
 - **`/` belongs to players; `/admin` is the commissioner's.** The root page is
   a list of races — tap one, land on `/race/:id/player` — so the site root is
   the only URL anyone has to know and it never changes between game nights.
@@ -463,9 +521,12 @@ nudging, per-car laps, manual correction.
   - **Done:** a race settings subview, and `scheduled` given real meaning —
     races start unstarted, the grid is editable until Start race drops the
     flag, and the roster locks after that.
-  - **Next:** season-level player pages (a view over the same `result` data
-    across races), then post-game review to confirm the finishing order before
-    a race is sealed.
+  - **Done:** seasons as a real entity — created, renamed, scored and archived
+    from `/admin`, with a season event log, the subcollection rules, and the
+    `seasonId`/`scheduledAt` index. `createRace` verifies its season.
+  - **Next:** the season roster (`seasons/{id}/members`), then player-side
+    season scoping, backfill/amend, and teams — the arc laid out in
+    `docs/seasons-and-teams.md`.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
     rules tighten — right now any signed-in caller can write anything, which
     suits a living room and not a public site. Decided: **Google sign-in**, with

@@ -15,10 +15,14 @@ export type RaceListVariant = "player" | "admin";
 
 export default function RaceList({
   variant = "admin",
+  seasonId,
 }: {
   variant?: RaceListVariant;
+  /** Scopes the listener to one season. Absent lists every race, which is what
+   *  the player landing wants: `/` is a list of races, not a season picker. */
+  seasonId?: string;
 }) {
-  const { races, loading } = useRaceList();
+  const { races, loading } = useRaceList(seasonId);
 
   if (variant === "admin") {
     if (races.length === 0) return null;

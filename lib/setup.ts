@@ -1,5 +1,6 @@
-import { collection, doc, serverTimestamp, writeBatch } from "firebase/firestore";
+import { collection, doc, getDoc, serverTimestamp, writeBatch } from "firebase/firestore";
 import { db } from "./firebase";
+import { seasonDoc } from "./seasons";
 import type { CarStatusProperty, GearRange, Race } from "./types";
 
 /** Player ids are slugs of their name so the same human is stable across races. */
@@ -73,12 +74,26 @@ export interface NewRaceInput {
   /** Starting grid order, front to back. */
   playerNames: string[];
   turnSeconds: number;
-  seasonId?: string;
+  /**
+   * Required, and verified to exist. It used to default to "default" against a
+   * document that might not be there — which made every race silently a member
+   * of a season nothing could enumerate. The season is the unit of identity
+   * now; a race is a thing that happens inside one.
+   */
+  seasonId: string;
 }
 
 export async function createRace(input: NewRaceInput): Promise<string> {
   const names = input.playerNames.map((n) => n.trim()).filter(Boolean);
   if (names.length === 0) throw new Error("Add at least one player");
+
+  // Read before the batch rather than inside it: a batch cannot read, and an
+  // orphaned race is worse than a slower create. Standings are scoped by
+  // seasonId, so a race pointing at nothing scores into nothing.
+  if (!input.seasonId) throw new Error("A race needs a season");
+  if (!(await getDoc(seasonDoc(input.seasonId))).exists()) {
+    throw new Error(`No season ${input.seasonId}`);
+  }
 
   const ids = names.map(playerId);
   const batch = writeBatch(db);
@@ -94,7 +109,7 @@ export async function createRace(input: NewRaceInput): Promise<string> {
   });
 
   batch.set(raceRef, {
-    seasonId: input.seasonId ?? "default",
+    seasonId: input.seasonId,
     track: input.track,
     scheduledAt: serverTimestamp(),
     // Scheduled, not live: the roster stays editable and the clock stays

@@ -26,6 +26,13 @@ export interface Season {
   name: string;
   scoringConfig: ScoringConfig;
   startDate: Timestamp;
+  /**
+   * Absent means active — the usual "absent is meaningful" rule, so seasons
+   * created before archiving existed need no migration. An archived season
+   * drops out of pickers and keeps its standings reachable: a finished season
+   * is history, not rubbish.
+   */
+  archived?: boolean;
 }
 
 /**
@@ -256,6 +263,11 @@ export interface LiveState {
 
 export type EventSource = "manual" | "chat" | "system";
 
+/**
+ * Shared by both append-only logs — the race log and the season log. They have
+ * the same shape on purpose: `source` and `actor` answer "who said so" the same
+ * way whichever log you are reading, and one shape means one set of rules.
+ */
 interface BaseEvent {
   id: string;
   /**
@@ -483,3 +495,43 @@ export type RaceEvent =
   | TurnResumedEvent
   | RaceFinishedEvent
   | CorrectionEvent;
+
+/**
+ * A patch of season configuration, one level deep. Same shape as the argument
+ * to `updateSeason`, so the event carries exactly what the caller asked for.
+ */
+export interface SeasonSettingsPatchShape {
+  name?: string;
+  scoringConfig?: ScoringConfig;
+  archived?: boolean;
+}
+
+/** Seeds the season log the way raceCreated seeds a race's. */
+export interface SeasonCreatedEvent extends BaseEvent {
+  type: "seasonCreated";
+  name: string;
+}
+
+/**
+ * A change to how the season is configured, carrying only the fields that were
+ * actually set — the log reads as a diff, exactly like raceSettingsChanged.
+ */
+export interface SeasonSettingsChangedEvent extends BaseEvent {
+  type: "seasonSettingsChanged";
+  patch: SeasonSettingsPatchShape;
+}
+
+/**
+ * The season's append-only log, under `seasons/{id}/events`.
+ *
+ * It ships before anything reads it, and that is deliberate. Nothing replays
+ * this log the way the race log can be replayed, and Phase 3's chatbot does not
+ * write to it — it earns its place on one narrow ground: from item 17 on, a
+ * team move silently re-derives the whole season's team standings, and this is
+ * the only thing that will record that the move happened. Unrecoverable after
+ * the fact, trivial to write now.
+ *
+ * Items 14 and 17 extend this union with their own variants. There is
+ * deliberately no history view yet.
+ */
+export type SeasonEvent = SeasonCreatedEvent | SeasonSettingsChangedEvent;
