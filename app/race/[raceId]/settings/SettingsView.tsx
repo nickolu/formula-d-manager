@@ -115,7 +115,7 @@ export default function SettingsView({ raceId }: { raceId: string }) {
         </Field>
 
         <div className="flex flex-wrap gap-4">
-          <Field label="Whose house">
+          <Field label="Location">
             <input
               value={locationValue}
               onChange={(e) => setLocation(e.target.value)}

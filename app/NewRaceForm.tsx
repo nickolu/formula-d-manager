@@ -106,7 +106,7 @@ export default function NewRaceForm({ seasonId }: { seasonId: string }) {
 
       <div className="flex flex-wrap gap-4">
         <label className="flex min-w-40 flex-1 flex-col gap-1">
-          <span className="text-sm text-neutral-500">Whose house</span>
+          <span className="text-sm text-neutral-500">Location</span>
           <input
             value={location}
             onChange={(e) => setLocation(e.target.value)}

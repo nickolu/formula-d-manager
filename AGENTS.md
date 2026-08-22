@@ -513,6 +513,29 @@ it lists every race, which is what `/` wants.
   historical path redirects **straight to the current one**, never chaining
   through the intermediate name: the tablets have old URLs bookmarked and a
   second round trip on house wifi buys nothing.
+- **The season's subviews are Races / Racer / Standings**, as a tab bar
+  (`app/SeasonTabs.tsx`) rather than the loose "standings" and "teams" links
+  that used to hang off the season name and read as decoration. A **top** bar,
+  unlike `PlayerTabs`: that one is fixed to the bottom because it is operated
+  mid-game with a thumb, while these pages are browsed between game nights and
+  a bar pinned over the standings table would cost a row of it for nothing.
+  `app/SeasonShell.tsx` is the frame both `/` and the `/season/:id` layout
+  render, so the two cannot drift; `/`'s Races tab points at `/` rather than at
+  the season's own URL, keeping the root the same shape every week.
+- **Identity is established at the season, not in a race.** Item 15 moved the
+  claim to `SeasonMember.claimedBy` but left the only screen that could make one
+  inside a race — so a player still had to open a race to say which racer was
+  theirs, which is backwards: the in-race claim is a *re-tappable override*, not
+  where identity comes from. `/season/:id/racer` is that screen. Claim once and
+  every race the season creates afterwards already knows you, because
+  `createRace` and `joinRace` seed from it. Typing your own name there joins the
+  league *and* claims you in one act — nobody types their name in to then watch
+  someone else take it.
+- **Teams is deliberately not a season tab.** The panel has to know who you are,
+  which is the claim, so it sits below the racer on that same screen — a Team
+  tab would open on "pick your racer first", which is the Racer screen with
+  extra steps. Same reasoning that keeps it out of the in-race tab bar.
+  `/season/:id/teams` redirects to `/season/:id/racer`.
 - **`/admin` is a season layer above the races.** The new-race form used to sit
   on `/admin` itself; it moved to `/admin/season/:seasonId` because a race must
   belong to a season that exists, so there is no coherent place to create one

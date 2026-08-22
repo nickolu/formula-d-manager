@@ -1,4 +1,4 @@
-import SeasonStandings from "./SeasonStandings";
+import StandingsTable from "@/app/standings/StandingsTable";
 
 export default async function SeasonStandingsPage({
   params,
@@ -6,5 +6,5 @@ export default async function SeasonStandingsPage({
   params: Promise<{ seasonId: string }>;
 }) {
   const { seasonId } = await params;
-  return <SeasonStandings seasonId={seasonId} />;
+  return <StandingsTable seasonId={seasonId} />;
 }

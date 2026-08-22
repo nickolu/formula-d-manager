@@ -12,6 +12,10 @@ const nextConfig: NextConfig = {
       { source: "/race/:raceId/device", destination: "/race/:raceId/player", permanent: true },
       { source: "/race/:raceId/entry", destination: "/race/:raceId/results", permanent: true },
       { source: "/race/:raceId/edit", destination: "/race/:raceId/results", permanent: true },
+      // Teams stopped being a season subview of its own: the panel has to know
+      // who you are, which is the claim, so it lives inside Racer rather than
+      // opening on "pick your racer first".
+      { source: "/season/:seasonId/teams", destination: "/season/:seasonId/racer", permanent: true },
     ];
   },
 };

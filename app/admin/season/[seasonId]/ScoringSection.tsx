@@ -27,6 +27,9 @@ export default function ScoringSection({ seasonId }: { seasonId: string }) {
   const config = season.scoringConfig;
   const pointsValue = points ?? config.positionPoints.join(", ");
   const beyondValue = beyond ?? String(config.pointsBeyondTable);
+  // Counted off the value being edited, not the saved one, so the sentence
+  // below follows along as the list is typed.
+  const places = pointsValue.split(",").map((n) => n.trim()).filter(Boolean).length;
 
   function parseScoring(): ScoringConfig {
     const positionPoints = pointsValue
@@ -81,7 +84,7 @@ export default function ScoringSection({ seasonId }: { seasonId: string }) {
         />
       </Field>
 
-      <Field label="Beyond the table">
+      <Field label="Points for anyone finishing lower">
         <input
           inputMode="numeric"
           value={beyondValue}
@@ -89,6 +92,14 @@ export default function ScoringSection({ seasonId }: { seasonId: string }) {
           className="w-full rounded border border-neutral-700 bg-neutral-900 p-3"
         />
       </Field>
+      {/* The label used to read "Beyond the table", which meant nothing unless
+          you already knew "the table" was the list above. Say which places it
+          actually covers, worked out from that list. */}
+      <p className="-mt-2 text-xs text-neutral-500">
+        {places === 0
+          ? "Everyone, until the list above has some points in it."
+          : `The list above covers ${places} ${places === 1 ? "place" : "places"}, so this is what ${ordinal(places + 1)} and below score.`}
+      </p>
 
       {/* Both said out loud, because both are rules that otherwise read as
           bugs: a retirement is scored, an absence is not. */}
@@ -130,4 +141,11 @@ function Field({
       {children}
     </label>
   );
+}
+
+/** 1st, 2nd, 3rd, 4th… so the hint reads as a sentence rather than a number. */
+function ordinal(n: number): string {
+  const rest = n % 100;
+  if (rest >= 11 && rest <= 13) return `${n}th`;
+  return `${n}${["th", "st", "nd", "rd"][n % 10] ?? "th"}`;
 }

@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSeasons } from "@/lib/hooks";
 import type { Season } from "@/lib/types";
@@ -17,18 +16,12 @@ import type { Season } from "@/lib/types";
  *
  * Archived seasons drop out of the switcher but keep their standings: a link
  * or a bookmark to `/season/:id` still works.
+ *
+ * It used to carry loose "standings" and "teams" links. Those became
+ * `SeasonTabs`, which reads as the three places a player can be rather than as
+ * decoration hanging off the season name.
  */
-export default function SeasonHeader({
-  season,
-  standingsHref,
-  teamsHref,
-}: {
-  season: Season | null;
-  /** Where "standings" goes. Absent hides the link — an unknown season has none. */
-  standingsHref?: string;
-  /** Where "teams" goes. Hidden when the season has teams off. */
-  teamsHref?: string;
-}) {
+export default function SeasonHeader({ season }: { season: Season | null }) {
   const { seasons } = useSeasons();
   const router = useRouter();
 
@@ -56,19 +49,6 @@ export default function SeasonHeader({
         <span className="text-neutral-500">{season?.name ?? "No season yet"}</span>
       )}
 
-      {standingsHref && (
-        <Link href={standingsHref} className="text-sm text-emerald-500">
-          standings
-        </Link>
-      )}
-
-      {/* Only when there is something behind it — a link to a page that says
-          "teams are off" is worse than no link. */}
-      {teamsHref && season?.teamConfig?.enabled && (
-        <Link href={teamsHref} className="text-sm text-emerald-500">
-          teams
-        </Link>
-      )}
     </div>
   );
 }
