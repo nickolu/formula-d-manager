@@ -1,8 +1,8 @@
 # Seasons and teams — the model
 
-Status: **steps 1–3 shipped** (seasons as a real entity, the season roster,
-and player-side season scoping — items 13, 14 and 15). Steps 4–7 are still
-proposal. Written before code so the arguments happen here rather than in
+Status: **steps 1–4 shipped** (seasons as a real entity, the season roster,
+player-side season scoping, and backfill/amend — items 13–16). Steps 5–7 (the
+teams arc) are still proposal. Written before code so the arguments happen here rather than in
 a diff.
 
 ## What this changes about the one idea
@@ -518,8 +518,11 @@ Each step leaves the app working.
    `/season/:id/standings`, the switcher in the header on `/`, the `/standings`
    redirect, and `claimSeasonRacer` seeding `participants/{id}.claimedBy` in
    both `createRace` and `joinRace`.
-4. **Backfill and amend** — `backfillRace`, `amendRaceResult`, the admin forms.
-   Orphan prune.
+4. ~~**Backfill and amend**~~ — **done.** `backfillRace` (no new event variant,
+   a date the admin picks, a minimal live doc), `amendRaceResult` (rewrites the
+   cache, appends an amendment plus a correction, leaves `raceFinished`
+   untouched), the backfill form on the season page, the amend control on the
+   results view, and `prune-orphan-races`.
 5. **Teams, admin side** — `teamConfig`, palette, create/assign, the colour
    claim map.
 6. **Teams, player side** — join/leave/rename in My racer and

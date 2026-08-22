@@ -137,6 +137,9 @@ function describePatch(patch: RaceSettingsChangedEvent["patch"]): string {
   if (patch.track !== undefined) parts.push(`track is now ${patch.track}`);
   if (patch.lapCount !== undefined) parts.push(`${patch.lapCount} laps`);
   if (patch.turnSeconds !== undefined) parts.push(`${patch.turnSeconds}s turns`);
+  if (patch.scheduledAt !== undefined) {
+    parts.push(`run on ${patch.scheduledAt.toDate().toLocaleDateString()}`);
+  }
   if (patch.settings?.betweenRounds !== undefined) {
     parts.push(`between-rounds pause ${patch.settings.betweenRounds ? "on" : "off"}`);
   }
@@ -206,6 +209,10 @@ function describe(event: RaceEvent, nameOf: (id: PlayerId) => string): string {
       return `Race finished — ${nameOf(event.order[0])} wins. Order: ${list(event.order)}${
         event.dnf.length > 0 ? `. Retired: ${list(event.dnf)}` : ""
       }.`;
+    case "raceResultAmended":
+      return `Result amended — ${nameOf(event.order[0])} wins. Order: ${list(event.order)}${
+        event.dnf.length > 0 ? `. Retired: ${list(event.dnf)}` : ""
+      }.${event.note ? ` (${event.note})` : ""}`;
     case "correction":
       return `Correction: ${event.note}`;
     default: {

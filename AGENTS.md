@@ -313,6 +313,48 @@ tap again. Putting your own name in mid-race also joins you to the *league*, not
 just to tonight's race — otherwise you would be missing from the roster the next
 grid is built from.
 
+**`backfillRace` introduces no new event variant, deliberately.** A race the
+app never timed is created already complete, and its log gets an ordinary
+`raceCreated` followed by an ordinary `raceFinished` — so replaying it produces
+the correct state with zero new logic anywhere. `backfilled: true` on the race
+document is the cache flag that lets a view say "entered afterwards". It writes
+a **minimal live doc** (`currentPlayerId: null`, `currentRound: 0`,
+`positionOrder` = the finishing order) so `useLiveState` and every screen
+reading it keep working instead of each special-casing a race with no live
+state. Both its events are stamped with the *date the race was run*, a second
+apart, because `at` means "when this happened" everywhere else in the log and a
+race from March must not sort to the top of it.
+
+`scheduledAt` became an input rather than always `serverTimestamp()`, and that
+was a live bug waiting: without it every backfilled race sorts to today and
+scrambles the season's order. `updateRaceSettings` takes it too, since a typed
+date can be wrong.
+
+**`amendRaceResult` is the mutation that looks like it breaks "corrections
+append, they never mutate", and the reason it does not is worth keeping
+stated.** `result` on the race document is a **cache of the log**, exactly as
+the live doc is — `finishRace` writes it in the same transaction that appends
+`raceFinished`, purely so standings can be a pure function over the races
+listener. Rewriting a cache is fine; rewriting history is not, and nothing here
+does. The original `raceFinished` is untouched, a `raceResultAmended` records
+the new order, and a `correction` pointing at that original is appended beside
+it, so the history view shows both in chronological place. Standings recompute
+on the next snapshot because they were never stored.
+
+Two details it does *not* share with `finishRace`. It validates against the
+sealed `result.order` rather than the live doc, because that is the record of
+who was actually in the race. And it does **not** union the retirements with
+what is already there: `finishRace` does that so a finishing form cannot
+silently un-retire a car, but "we wrote down that he retired and he did not" is
+exactly the mistake an amendment exists to fix, and a union would make it the
+one correction that cannot be made. The target event is looked up *before* the
+transaction, because the web SDK cannot query a collection inside one.
+
+`scripts/prune-orphan-races.ts` reports by default and only deletes with
+`--delete`, and it goes through `deleteRace` — so the "finish it first" rule
+holds there too, and a live orphan is reported and left alone. A one-time script
+rather than a button, so that rule never acquires a back door.
+
 **Firestore rules do not inherit into subcollections.** `match /seasons/{id}`
 covers the season document and nothing under it, and a missing nested match is
 a silent permission denial at the table, not a build error. So `events`
@@ -619,8 +661,11 @@ nudging, per-car laps, manual correction.
   - **Done:** player-side season scoping — `/season/:id`, per-season standings,
     a switcher in the header rather than a picker in front of the root, and a
     racer claim that lasts the season and seeds each race's.
-  - **Next:** backfill and amend a past race, then teams — the arc laid out in
-    `docs/seasons-and-teams.md`.
+  - **Done:** backfill a race the app never timed, and amend a finished one —
+    plus `npm run prune-orphan-races` for races pointing at a season that isn't
+    there.
+  - **Next:** teams — admin side, then player side, then the two-table
+    standings rebuild. The arc is laid out in `docs/seasons-and-teams.md`.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
     rules tighten — right now any signed-in caller can write anything, which
     suits a living room and not a public site. Decided: **Google sign-in**, with

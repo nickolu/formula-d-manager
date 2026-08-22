@@ -23,6 +23,7 @@ import {
 import { app, db } from "../lib/firebase";
 import {
   advanceTurn,
+  amendRaceResult,
   claimRacer,
   completeLap,
   deleteRace,
@@ -60,9 +61,16 @@ import {
   seasonMemberDoc,
   updateSeason,
 } from "../lib/seasons";
-import { createRace, DEFAULT_CAR_STATUS_SPEC } from "../lib/setup";
+import { backfillRace, createRace, DEFAULT_CAR_STATUS_SPEC } from "../lib/setup";
 import { readTimer } from "../lib/timer";
-import type { LiveState, Participant, Race, Season, SeasonEvent } from "../lib/types";
+import type {
+  LiveState,
+  Participant,
+  Race,
+  RaceEvent,
+  Season,
+  SeasonEvent,
+} from "../lib/types";
 
 /** The race's configured turn length — what a rewind must reset the clock to. */
 const TURN_SECONDS = 90;
@@ -1014,6 +1022,152 @@ async function main() {
     "...and allowed again once no race is running",
     !(await getDoc(seasonMemberDoc(seasonId, foxtrot))).exists(),
   );
+
+  console.log("\nbackfilling a race the app never timed:");
+  const runOn = new Date(2020, 4, 17);
+  const backfilledId = await backfillRace({
+    seasonId,
+    track: "SMOKE-TEST backfill",
+    scheduledAt: runOn,
+    playerNames: ["Bravo", "Alpha", "Charlie"],
+    dnfNames: ["Charlie"],
+  });
+  const backfilled = (await getDoc(raceDoc(backfilledId))).data() as Race;
+  check("it is created already complete", backfilled.status === "complete");
+  check("it is flagged as entered afterwards", backfilled.backfilled === true);
+  check(
+    "it sorts by the date given, not by today",
+    backfilled.scheduledAt.toDate().getFullYear() === 2020,
+    backfilled.scheduledAt.toDate().toISOString(),
+  );
+  check(
+    "the result is denormalized like any finished race",
+    backfilled.result?.order.join(",") === "bravo,alpha,charlie" &&
+      backfilled.result?.dnf.join(",") === "charlie",
+  );
+  // The minimal live doc is what keeps every screen from special-casing a race
+  // the app never timed.
+  const backfilledLive = (await getDoc(liveDoc(backfilledId))).data() as LiveState;
+  check(
+    "a live doc exists so every screen still renders",
+    backfilledLive.currentPlayerId === null &&
+      backfilledLive.currentRound === 0 &&
+      backfilledLive.positionOrder.join(",") === "bravo,alpha,charlie",
+  );
+  const backfilledParticipant = (
+    await getDoc(participantDoc(backfilledId, "charlie"))
+  ).data() as Participant;
+  check(
+    "participants carry their finishing position and flag",
+    backfilledParticipant.finalPosition === 3 && backfilledParticipant.dnf === true,
+  );
+  const backfilledEvents = (
+    await getDocs(collection(db, "races", backfilledId, "events"))
+  ).docs.map((d) => (d.data() as RaceEvent).type);
+  check(
+    "the log gets ordinary raceCreated and raceFinished — no new variant",
+    backfilledEvents.sort().join(",") === "raceCreated,raceFinished",
+    backfilledEvents.join(","),
+  );
+  const backfilledStandings = computeStandings(
+    [{ ...backfilled, id: backfilledId } as Race],
+    DEFAULT_SCORING,
+    seasonId,
+  );
+  check(
+    "it scores like any other race",
+    backfilledStandings[0]?.playerId === "bravo" &&
+      backfilledStandings[0]?.points === 10,
+  );
+  await rejects(
+    () =>
+      backfillRace({
+        seasonId,
+        track: "SMOKE-TEST bad backfill",
+        scheduledAt: runOn,
+        playerNames: ["Alpha", "Alpha"],
+      }),
+    "a backfill with a duplicate in the order is refused",
+  );
+  await rejects(
+    () =>
+      backfillRace({
+        seasonId,
+        track: "SMOKE-TEST bad backfill",
+        scheduledAt: runOn,
+        playerNames: ["Alpha"],
+        dnfNames: ["Bravo"],
+      }),
+    "a backfilled DNF who is not in the order is refused",
+  );
+
+  console.log("\namending a finished race — a cache is rewritten, not history:");
+  await rejects(
+    () =>
+      amendRaceResult(backfilledId, ["alpha", "bravo"], [], "partial", {
+        source: "manual",
+      }),
+    "a partial amended order is refused",
+  );
+  await rejects(
+    () =>
+      amendRaceResult(
+        backfilledId,
+        ["alpha", "bravo", "charlie", "delta"],
+        [],
+        "stranger",
+        { source: "manual" },
+      ),
+    "a stranger in the amended order is refused",
+  );
+
+  await amendRaceResult(
+    backfilledId,
+    ["alpha", "bravo", "charlie"],
+    [],
+    "Bravo was second, not first",
+    { source: "manual" },
+  );
+  const amended = (await getDoc(raceDoc(backfilledId))).data() as Race;
+  check(
+    "the result cache is rewritten",
+    amended.result?.order.join(",") === "alpha,bravo,charlie",
+    amended.result?.order.join(","),
+  );
+  check(
+    "an amendment can un-retire a car — that is a legitimate correction",
+    amended.result?.dnf.length === 0,
+  );
+  check(
+    "participants follow the new order",
+    ((await getDoc(participantDoc(backfilledId, "alpha"))).data() as Participant)
+      .finalPosition === 1,
+  );
+  const amendedEvents = (
+    await getDocs(collection(db, "races", backfilledId, "events"))
+  ).docs.map((d) => ({ id: d.id, ...d.data() }) as RaceEvent);
+  const amendedTypes = amendedEvents.map((e) => e.type);
+  check(
+    "the original raceFinished is still there, untouched",
+    amendedTypes.filter((t) => t === "raceFinished").length === 1,
+  );
+  check("the amendment is logged", amendedTypes.includes("raceResultAmended"));
+  const correction = amendedEvents.find((e) => e.type === "correction");
+  const originalFinish = amendedEvents.find((e) => e.type === "raceFinished");
+  check(
+    "a correction points at the original finish",
+    correction?.type === "correction" &&
+      correction.targetEventId === originalFinish?.id,
+  );
+  check(
+    "standings follow the amendment, having never been stored",
+    computeStandings(
+      [{ ...amended, id: backfilledId } as Race],
+      DEFAULT_SCORING,
+      seasonId,
+    )[0]?.playerId === "alpha",
+  );
+  await deleteRace(backfilledId);
 
   console.log("\ndeleting the race — which is also the cleanup:");
   await deleteRace(raceId);

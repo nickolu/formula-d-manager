@@ -119,6 +119,11 @@ function AdminRow({ race }: { race: Race }) {
       <span>
         {race.track}
         <span className="ml-2 text-sm text-neutral-500">{race.status}</span>
+        {/* A race the app never timed. Worth saying, because its history is two
+            events long and its lap counts are all zero by construction. */}
+        {race.backfilled && (
+          <span className="ml-2 text-sm text-neutral-600">· entered afterwards</span>
+        )}
       </span>
       <span className="flex gap-4 text-sm">
         <Link href={`/race/${race.id}/player`} className="text-emerald-500">

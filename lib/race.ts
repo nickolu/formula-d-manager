@@ -5,9 +5,13 @@ import {
   getDoc,
   getDocs,
   increment,
+  limit,
+  query,
   runTransaction,
   serverTimestamp,
+  Timestamp,
   type Transaction,
+  where,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { carStatusSpecFor, gearsFor, playerId as slugFor, startOf } from "./setup";
@@ -17,6 +21,7 @@ import type {
   Participant,
   PlayerId,
   Race,
+  RaceSettingsChangedEvent,
   RaceSettingsPatchShape,
 } from "./types";
 
@@ -109,6 +114,11 @@ export interface RaceSettingsPatch {
   lapCount?: number;
   /** Written to turnDurationDefaultMs; takes effect on the next turn. */
   turnSeconds?: number;
+  /**
+   * When the race was run. Editable because a backfilled date can be typed
+   * wrong, and the season's race order depends on it.
+   */
+  scheduledAt?: Date;
   settings?: RaceSettingsPatchShape;
 }
 
@@ -134,7 +144,9 @@ export async function updateRaceSettings(
 
     // Firestore rejects undefined, and an event carrying keys that did not
     // change would make the log lie about what happened.
-    const applied: RaceSettingsPatch = {};
+    // Typed off the *event*, not off the patch: the caller passes a Date and
+    // the log stores a Timestamp, so they are not the same shape.
+    const applied: RaceSettingsChangedEvent["patch"] = {};
     const raceFields: Record<string, unknown> = {};
 
     if (patch.track !== undefined) {
@@ -149,6 +161,11 @@ export async function updateRaceSettings(
       }
       raceFields.lapCount = patch.lapCount;
       applied.lapCount = patch.lapCount;
+    }
+    if (patch.scheduledAt !== undefined) {
+      const at = Timestamp.fromDate(patch.scheduledAt);
+      raceFields.scheduledAt = at;
+      applied.scheduledAt = at;
     }
     if (patch.settings !== undefined) {
       // Dot paths rather than a nested object: writing `settings` whole would
@@ -927,6 +944,100 @@ export async function finishRace(
       type: "raceFinished",
       order,
       dnf: retirements,
+    });
+  });
+}
+
+/**
+ * Rewrites a finished race's result.
+ *
+ * This is the mutation that looks like it breaks the project's central rule, so
+ * here is precisely why it does not. **`result` on the race document is a cache
+ * of the log**, exactly as the live doc is — `finishRace` writes it in the same
+ * transaction that appends `raceFinished`, purely so standings can be a pure
+ * function over the races listener. Rewriting a cache is fine. Rewriting
+ * history is not, and nothing here does: the original `raceFinished` event is
+ * untouched, a `raceResultAmended` event records the new order, and a
+ * `correction` pointing at that original is appended beside it. The history
+ * view shows both, in chronological place.
+ *
+ * Standings recompute on the next snapshot because they were never stored.
+ *
+ * The target event is looked up *before* the transaction, because the web SDK
+ * cannot query a collection inside one. A race that has somehow never had a
+ * raceFinished event gets `targetEventId: ""`, which is a legitimate value
+ * meaning "no specific target" — the same one `uncompleteLap` writes.
+ */
+export async function amendRaceResult(
+  raceId: string,
+  order: PlayerId[],
+  dnf: PlayerId[],
+  note: string,
+  who: Actor,
+) {
+  const finishes = await getDocs(
+    query(eventsCol(raceId), where("type", "==", "raceFinished"), limit(1)),
+  );
+  const targetEventId = finishes.docs[0]?.id ?? "";
+
+  await runTransaction(db, async (tx) => {
+    const race = await readRace(tx, raceId);
+    if (race.status !== "complete" || !race.result) {
+      throw new Error("This race has not been finished yet");
+    }
+
+    // Validated against the sealed result rather than the live doc: the sealed
+    // order is the record of who was actually in this race. A partial order
+    // would silently under-count the season, exactly as it would in finishRace.
+    const expected = new Set(race.result.order);
+    const got = new Set(order);
+    if (got.size !== order.length) {
+      throw new Error("Finishing order contains a duplicate");
+    }
+    for (const playerId of expected) {
+      if (!got.has(playerId)) {
+        throw new Error(`Finishing order is missing ${playerId}`);
+      }
+    }
+    for (const playerId of got) {
+      if (!expected.has(playerId)) {
+        throw new Error(`${playerId} is not in this race`);
+      }
+    }
+    for (const playerId of dnf) {
+      if (!got.has(playerId)) {
+        throw new Error(`DNF ${playerId} is not in the finishing order`);
+      }
+    }
+
+    // Unlike finishRace, retirements are NOT unioned with what is already
+    // there. Un-retiring a car is a legitimate amendment — "we wrote down that
+    // he retired and he did not" is exactly the kind of mistake this exists to
+    // fix — and a union would make it the one correction that cannot be made.
+    tx.update(raceDoc(raceId), { result: { order, dnf } });
+    tx.update(liveDoc(raceId), {
+      positionOrder: order,
+      retired: dnf,
+      updatedAt: serverTimestamp(),
+    });
+
+    order.forEach((playerId, i) => {
+      tx.update(participantDoc(raceId, playerId), {
+        finalPosition: i + 1,
+        dnf: dnf.includes(playerId),
+      });
+    });
+
+    appendEvent(tx, raceId, who, {
+      type: "raceResultAmended",
+      order,
+      dnf,
+      note: note.trim(),
+    });
+    appendEvent(tx, raceId, who, {
+      type: "correction",
+      targetEventId,
+      note: note.trim() || "Result amended",
     });
   });
 }

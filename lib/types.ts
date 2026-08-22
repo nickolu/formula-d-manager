@@ -114,6 +114,15 @@ export interface Race {
   lapCount: number;
   /** Absent on races created before toggles existed; absent means off. */
   settings?: RaceSettings;
+  /**
+   * True for a race entered after the fact, that the app never timed.
+   *
+   * A cache flag, so a view can say "entered afterwards" — deliberately NOT a
+   * new event variant. `backfillRace` writes an ordinary `raceCreated` followed
+   * by an ordinary `raceFinished`, so replaying the log produces the right
+   * state with no new logic anywhere.
+   */
+  backfilled?: boolean;
   /** Present only once the race is complete. Absent on live/scheduled races. */
   result?: RaceResult;
 }
@@ -377,6 +386,8 @@ export interface RaceSettingsChangedEvent extends BaseEvent {
     track?: string;
     lapCount?: number;
     turnSeconds?: number;
+    /** When the race was run. Editable because a backfilled date can be wrong. */
+    scheduledAt?: Timestamp;
     settings?: RaceSettingsPatchShape;
   };
 }
@@ -464,6 +475,23 @@ export interface RaceFinishedEvent extends BaseEvent {
 }
 
 /**
+ * A finished race's result was rewritten.
+ *
+ * This does not break "corrections append, they never mutate", and the reason
+ * is worth stating: `result` on the race document is a **cache of the log**,
+ * exactly as the live doc is. Rewriting a cache is fine; rewriting history is
+ * not. The original raceFinished event is untouched, this event records the new
+ * order, and a `correction` pointing at that raceFinished is appended beside it
+ * — so the history view shows both, in chronological place.
+ */
+export interface RaceResultAmendedEvent extends BaseEvent {
+  type: "raceResultAmended";
+  order: PlayerId[];
+  dnf: PlayerId[];
+  note: string;
+}
+
+/**
  * Corrections append rather than mutate, so the audit trail survives and a bad
  * transcription is one undo instead of a corrupted race.
  */
@@ -494,6 +522,7 @@ export type RaceEvent =
   | TurnPausedEvent
   | TurnResumedEvent
   | RaceFinishedEvent
+  | RaceResultAmendedEvent
   | CorrectionEvent;
 
 /**

@@ -6,6 +6,7 @@ import { useState } from "react";
 import Nav from "@/app/Nav";
 import NewRaceForm from "@/app/NewRaceForm";
 import RaceList from "@/app/RaceList";
+import BackfillForm from "./BackfillForm";
 import RosterSection from "./RosterSection";
 import { useSeason } from "@/lib/hooks";
 import { deleteSeason, updateSeason } from "@/lib/seasons";
@@ -109,6 +110,7 @@ export default function SeasonAdminView({ seasonId }: { seasonId: string }) {
           Races
         </h2>
         <NewRaceForm seasonId={seasonId} />
+        <BackfillForm seasonId={seasonId} />
         <RaceList variant="admin" seasonId={seasonId} />
       </section>
 
