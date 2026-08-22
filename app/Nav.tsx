@@ -3,8 +3,8 @@ import Link from "next/link";
 /**
  * Opt-in rather than rendered from layout.tsx, on purpose: the big screen and
  * the tablet must stay chrome-free. The screen is read from across a room and
- * the device's buttons are sized for a thumb at arm's length — neither wants a
- * nav bar, and putting this in the layout would give both one.
+ * the player view's buttons are sized for a thumb at arm's length — neither
+ * wants a nav bar, and putting this in the layout would give both one.
  */
 export default function Nav({ raceId }: { raceId?: string }) {
   return (
@@ -14,9 +14,12 @@ export default function Nav({ raceId }: { raceId?: string }) {
       </Link>
       <span className="flex gap-4 text-sm text-emerald-500">
         <Link href="/standings">standings</Link>
+        {/* The only way to find /admin. Nothing hides it — there is no auth to
+            hide it behind yet. */}
+        <Link href="/admin">admin</Link>
         {raceId && (
           <>
-            <Link href={`/race/${raceId}/device`}>device</Link>
+            <Link href={`/race/${raceId}/player`}>player</Link>
             <Link href={`/race/${raceId}/screen`}>screen</Link>
           </>
         )}

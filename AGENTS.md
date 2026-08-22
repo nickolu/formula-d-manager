@@ -41,21 +41,66 @@ once: the round ends and the next `roundOrder` is snapshotted from
 a mid-round overtake affect the *next* round instead of reshuffling a round
 already in progress.
 
-`rewindTurn` walks the same list backwards, for a mis-tapped turn. Because
-rollover overwrites `roundOrder`, it can only cross a boundary thanks to
-`previousRoundOrder` — one round of history, saved by `advanceTurn` at each
-rollover and cleared once used. Rewinding deliberately does **not** try to
-restore `positionOrder`: standings are human-nudged and the operator is looking
-straight at the board.
+`rewindTurn` walks the same list backwards, for a mis-tapped turn. It leaves
+the race **paused with a full clock**: `turnStartedAt: null` (which `readTimer`
+already reads as paused — no pause flag was added) and `turnDurationMs` reset
+to `turnDurationDefaultMs`. Rewinding means something went wrong at the table
+and people are arguing about it; starting a clock on that argument is wrong,
+and handing back the four seconds that were left is worse. Only `turnRewound`
+is emitted — "a rewind leaves the race paused with a fresh clock" is a rule of
+the system, not a separate thing that happened, so a replay applies it without
+a second event.
+
+`turnDurationDefaultMs` exists because `turnDurationMs` is **not** the race's
+configured turn length: `pauseTurn` overwrites it with whatever time was left.
+It is seeded by `createRace`, optional (races predating it fall back to
+`turnDurationMs` — no migrations here), and it is the field the race settings
+view edits.
+
+Because rollover overwrites `roundOrder`, a rewind can only cross a boundary
+thanks to `previousRoundOrder` — one round of history, saved by `advanceTurn`
+at each rollover and cleared once used. Rewinding deliberately does **not** try
+to restore `positionOrder`: standings are human-nudged and the operator is
+looking straight at the board.
 
 **A round is not a lap.** One round = every car moves once. A lap spans many
 rounds. And laps are *per car* — the leader can be on lap 2 while a back marker
 is on lap 1 — so `currentRound` is global on the live doc while `lapsCompleted`
 lives on each participant. There is no global lap counter, deliberately.
 
-The app does **not** model the board: no car positions, no gear, no wear tokens.
-Humans nudge the standings when an overtake happens. Adding board state was
-explicitly rejected — it re-implements the game and can desync from the table.
+The app does **not** model the board: no car positions, no move validation, no
+computing what a roll allows. Humans nudge the standings when an overtake
+happens. Adding board state was explicitly rejected — it re-implements the game
+and can desync from the table.
+
+**The car status card and the gear lever are not a reversal of that**, and the
+line between them and the rejection is worth stating precisely, because it is
+easy to cross by accident. `Participant.carStatus` and `Participant.gear` are
+shared counters standing in for a piece of cardboard and a lever, the way the
+standings list stands in for looking at the table. What keeps them honest: the
+app never *derives* anything from those numbers and never enforces a rule with
+them, so nothing can desync — a wrong value is wrong on a screen, not wrong in
+the game. **Keep it that way.** The moment something validates a move against
+remaining tires, or checks a roll against the current gear's range, this becomes
+a board model and the rejection above applies. The gear ranges are *printed*
+next to the lever, exactly as they are printed on the card; nothing reads them.
+
+(An earlier version of this file listed "no gear" among the rejected state. That
+was the right call for a gear the app *acted on* and the wrong wording for a
+gear it merely displays. The distinction above is the rule.)
+
+The card is off by default. Its spec and gear ranges live in
+`races/{id}.settings.carStatus` in Firestore rather than in code, following the
+`scoringConfig` precedent: house variants must not need a deploy, and a race
+keeps whatever it was created with. Each property carries a `start` (what an
+undamaged car has) *and* a `max` (the most it can hold once upgraded) — they
+differ, so a key absent from a participant's `carStatus` means **`start`**, not
+full, read through `startOf`. `setCarStatus` clamps to `0..max` and refuses an
+unknown key **in `lib/race.ts`**, not only in the UI, because every caller — the
+Phase 3 chatbot included — has to hit the same limit; `setGear` refuses a gear
+the race's set doesn't define. There are deliberately no permissions: anyone can
+change anyone's card, exactly as anyone can reach across the table and move your
+pegs.
 
 **Retirement is live state, not a finishing attribute.** A car that breaks on
 lap 1 stops taking turns immediately, so `setDnf` writes `participants/{id}.dnf`
@@ -149,22 +194,222 @@ it already exists so it can never clobber a scoring table tuned in the console.
   House rules churn; changing them must not require a deploy.
 - Every event carries `source: "manual" | "chat" | "system"` so chat-entered
   mistakes stay traceable.
-- The three race screens are `/race/:id/device` (the tablet), `/race/:id/screen`
-  (the big screen) and `/race/:id/edit` (corrections). The old `/table` and
-  `/entry` paths permanently redirect, because the tablets had them bookmarked.
+- The race screens are `/race/:id/player` (what a player looks at, on a phone
+  or the shared tablet), `/race/:id/screen` (the big screen), and two
+  commissioner ones: `/race/:id/results` (corrections and finishing) and
+  `/race/:id/settings`. **Race settings is deliberately not a player subview** —
+  it is commissioner work, it does not belong in a tab bar a player thumbs
+  through mid-game, and it sits beside the results screen for the same reason
+  that one does. Both are reached from the race list on `/admin`. The player
+  and screen views have been renamed twice —
+  `table` → `device` → `player`, `entry` → `edit` → `results` — and every
+  historical path redirects **straight to the current one**, never chaining
+  through the intermediate name: the tablets have old URLs bookmarked and a
+  second round trip on house wifi buys nothing.
+- **`/` belongs to players; `/admin` is the commissioner's.** The root page is
+  a list of races — tap one, land on `/race/:id/player` — so the site root is
+  the only URL anyone has to know and it never changes between game nights.
+  Everything the root used to do (new-race form, per-view links) moved to
+  `/admin`, reachable only from `Nav.tsx`; nothing hides it, because there is
+  no auth to hide it behind yet and pretending otherwise would be theatre.
+  `app/RaceList.tsx` renders both with a `variant` prop rather than forking —
+  the listener, ordering and empty state are shared and two copies would drift.
+  The landing groups live races above a collapsed "Past races", and
+  deliberately **does not auto-redirect when exactly one race is live**: it
+  would save a tap at the cost of the root behaving differently week to week,
+  and it would strand anyone trying to reach a finished race.
+- **`scheduled` is a real state.** A race is created `scheduled` with its clock
+  stopped, and `startRace` is the explicit moment the flag drops: it flips the
+  status to `live`, anchors the timer, snapshots `roundOrder` from
+  `positionOrder` and rewrites each participant's `startPosition`. Snapshotting
+  at the start rather than at creation is what lets the grid be reordered right
+  up to the flag without leaving the recorded start positions describing a race
+  nobody ran. The roster is editable only while `scheduled` — `removePlayer`
+  refuses afterwards, because mid-race it would have to unpick three ordered
+  lists *and* re-anchor a round already in progress. Retiring a car is the
+  in-race answer, and it is reversible.
+- **The between-rounds interstitial.** With `settings.betweenRounds` on (the
+  default for new races; absent means off, so old races are untouched), a
+  rollover stops on nobody's turn: `phase: "betweenRounds"`,
+  `currentPlayerId: null`, clock paused with a full duration. The round still
+  increments and `roundOrder` is still snapshotted there — only the *selection*
+  waits. `startRound` leaves the interstitial and is where `roundStarted` is
+  emitted, so that event marks the round actually beginning rather than the
+  previous one ending; with the toggle off those are the same instant and
+  `advanceTurn` emits it inline as before. Entering the interstitial appends
+  `roundEnded`, because the operator did tap Next turn and the log must say so.
+  `rewindTurn` treats the interstitial as a boundary crossing and reuses that
+  branch — in the interstitial `roundOrder` is already the *next* round's
+  snapshot, so stepping back within it would be meaningless.
+- **The player view has a header saying which race it is, and a way out.** A
+  player arrives cold from a list of races, so the view has to name the race —
+  and it has to be possible to have tapped the wrong one. The paradigm that the
+  player view is self-sufficient is about never sending someone elsewhere to
+  *do* something; leaving is not doing something, and a screen with no exit is
+  a trap. `PlayerHeader` lives in the player layout so every subview gets it,
+  and it is **not** `app/Nav.tsx`: nav chrome would put standings and admin
+  links in front of a player mid-game.
+- **A missing `carStatus.spec` falls back to the default.** Switching the card
+  on writes only `enabled`, so a race created before the card existed would
+  have no spec — and would render nothing while every `setCarStatus` threw.
+  `carStatusSpecFor` is the one place that resolves it, used by both the view
+  and the mutation. This is the "every reader handles the field's absence" rule
+  doing its job: an old race gets the standard card, not a broken one.
+- **The car card renders a change before the write lands, and the release rule
+  is the whole trick.** Firestore's latency compensation covers plain writes but
+  **not transactions**, and every mutation here is a transaction — so the local
+  cache has nothing to show until the server answers, and a peg tap sat visibly
+  waiting. `CarStatusCard` holds the tapped value and shows it at once. The part
+  that is easy to get wrong is when to stop: releasing on the write's promise is
+  a flicker, because a transaction resolves when the server commits, which is
+  *before* the snapshot carrying that commit arrives — for one frame the row
+  falls back to the pre-tap value. So a held value is released only when keeping
+  it would be wrong: the write failed (dropping it *is* the undo, since the
+  streamed value is already the truth), or the store settled on something that is
+  neither our value nor what was there when our write landed, meaning someone
+  else moved it. When the store merely catches up with what is already on screen,
+  nothing happens at all — a successful tap renders exactly once. This is why the
+  injected write must **rethrow**: `runReported` surfaces the error and rethrows,
+  and the undo hangs off that rejection. Card edits also skip the busy flag;
+  dimming the card on every tap was most of what made it feel slow.
+- **The reverse gear is deliberately not beside Next turn.** "Back a turn" is a
+  small, muted link at the *top* of the player view, not a button in the row
+  with the primary action. Next turn is tapped a few hundred times a night and
+  a rewind is tapped almost never, but a mistaken rewind un-does a move and
+  stops the clock — and anything placed beside a target that big eventually
+  gets caught by a thumb. Small-and-adjacent was tried first and was the wrong
+  trade. Keep it visually quiet and physically far from the primary button.
+- **Nobody's turn means two different things** — the race is over, or it is
+  between rounds. Every view discriminates on `race.status === "complete"`,
+  never on the null `currentPlayerId`. `finishRace` nulls it too.
+- **`joinRace` adds to `positionOrder` only, never `roundOrder`.** A late
+  arrival starts taking turns *next* round, when the rollover snapshots
+  standings — the same rule as an overtake. Splicing a car into a round already
+  underway would break the `turnIndex`/`alreadyMoved` arithmetic in the views
+  and hand the joiner a turn out of nowhere. Adding stays open once a race is
+  live even though item 6 locked removal: a late arrival is normal, unpicking
+  someone from three ordered lists mid-race is not.
+- **Identity is a claim on a participant, and "my racer" is derived.**
+  `Participant.claimedBy` holds the anonymous auth uid `AuthGate` establishes —
+  read through `useUid()`, never `getAuth()` from a component, so there is one
+  place to change when Phase 2 brings real accounts. It has to be shared state
+  rather than `localStorage`: "you cannot pick a racer someone else picked" is
+  a fact about the race. The device's own racer is never stored — it is the
+  participant whose `claimedBy` matches, derived like standings and car
+  identity, so the two halves cannot disagree. `claimRacer` re-reads
+  `claimedBy` in a transaction and refuses a taken racer; two phones tapping
+  the same one is a real race at a table. Changing racer releases the old claim
+  in the same transaction, and the caller passes the racer it currently holds
+  because **the web SDK cannot run a collection query inside a transaction** —
+  that value is verified before being cleared, so a stale one can never free
+  someone else's claim.
+- **One free-text note per participant, not a DNF-only reason.** `Participant.note`
+  is written by `setParticipantNote`, and the results view labels it by context —
+  "Reason" for a retired car, "Note" otherwise. "Blew the engine on lap 3" and
+  "won it on the last corner" are the same shape of data, so one field avoids a
+  second schema later, and a note that isn't coupled to the DNF flag survives
+  un-retiring instead of being orphaned or silently destroyed. An empty string
+  *clears* the note rather than deleting the field, so the clearing still
+  appends an event. Notes are **not** on `RaceResult`: that is a scoring cache,
+  notes are not scoring input, and `computeStandings` stays a pure function of
+  finishes. They stay editable after a race is sealed — they are commentary.
+- **`deleteRace` is the one mutation that appends no event** — there would be
+  nowhere to append it to. The event log survives: the rules forbid deleting
+  event documents, so they are left orphaned under a race that no longer
+  exists, invisible to the app because nothing queries events except scoped to
+  a race. Do not loosen the rules to "fix" it. It refuses anything that is not
+  `complete` — that is a data rule, not a button state — and it deletes
+  participants, then the live doc, then the race doc **last**, so a failure
+  part-way leaves a findable race rather than orphaned subcollections. It is
+  not a transaction because Firestore has no client-side recursive delete.
+- **`advanceTurn` deliberately does not check the race status.** It is the hot
+  path — once per turn, per race — and adding a race-doc read would double its
+  cost to guard against something no screen offers.
+- **Race configuration goes through `updateRaceSettings`**, which writes the
+  race doc and/or the live doc and appends one `raceSettingsChanged` event
+  carrying **only the fields that changed**, so the log reads as a diff rather
+  than a snapshot. Changing the turn length writes `turnDurationDefaultMs`
+  only, taking effect on the next turn: yanking the clock out from under
+  whoever is mid-move starts arguments. If the race is already paused there is
+  nobody to disturb, so `turnDurationMs` is written too — which is what an
+  operator changing it during a break expects. Feature toggles live under
+  `races/{id}.settings` and are written by **dot path**, since writing the map
+  whole would silently clear a toggle the caller never mentioned.
+- **Player subviews are real routes, not conditional render.** A player lands
+  cold on a phone with no navigation history, so every subview has to be
+  reachable by URL and survive a reload. `app/race/[raceId]/player/layout.tsx`
+  is a server component that awaits `params` and hands the id to
+  `PlayerTabs`, a fixed **bottom** tab bar — thumb-reachable, which a top bar
+  is not, and it survives the page scrolling. Active state comes from
+  `usePathname`, not from state, which is what makes a cold load land on the
+  right tab. Only subviews that exist get a tab: a tab leading to a 404 is
+  worse than no tab — and race settings is not one of them, being a sibling
+  route rather than a subview.
+- The **history subview** renders the event log as sentences, newest first —
+  the log is the product, and this is the first view that shows it as such.
+  `describe()` in `HistoryView.tsx` switches exhaustively over `RaceEvent` and
+  ends in a `never` assignment, so adding a variant to the union without
+  describing it fails `npx tsc --noEmit` instead of rendering a blank line at
+  the table. `BaseEvent.at` is typed `Timestamp | null` for the same reason:
+  it is a `serverTimestamp()` and the persistent cache surfaces a local write
+  before the server acknowledges it, so every event this device appends
+  renders once with no timestamp. Corrections are shown in chronological place
+  with their target's sentence beneath them rather than folded into the target
+  — a correction that happened a minute ago must not vanish into a row from
+  half an hour ago — and `targetEventId: ""` (what `uncompleteLap` writes) is a
+  legitimate value meaning "no specific target".
 - `app/Nav.tsx` is opt-in per page, **not** rendered from `layout.tsx`. The big
   screen is read from across a room and the tablet's buttons are sized for a
   thumb at arm's length; neither wants nav chrome, and the layout would give
   both one.
-- Drag-to-reorder (`app/ReorderableList.tsx`) is built on pointer events, not
-  HTML5 drag-and-drop. Native drag events never fire on touch, so `draggable`
-  would silently do nothing on the tablet — the one screen it's for. The ↑/↓
-  buttons stay as a fallback.
+- Drag-to-reorder is built on pointer events, not HTML5 drag-and-drop. Native
+  drag events never fire on touch, so `draggable` would silently do nothing on
+  the phones and tablet this is for. The mechanics live in
+  `app/useDragOrder.ts` and are shared by `app/ReorderableList.tsx` and the
+  track view; the ↑/↓ buttons stay as a fallback.
+- **The list does not reorder while you drag it.** An earlier version spliced a
+  preview array on every pointermove, so rows jumped between slots and the thing
+  under your finger was whatever had landed there. Now the DOM order stands
+  still and everything moves by transform: the dragged row lifts and follows the
+  pointer, the rows it passes ease aside, and only the drop changes the real
+  order. Geometry is measured once at drag start — nothing reflows mid-drag, so
+  those measurements stay true and each frame is a subtraction. Anything that
+  *reads* as a position, like a row's number, comes from `projectedIndex` rather
+  than the render index, or it would sit there contradicting the eye.
+- **The drop is held optimistically too**, for the same reason the car card
+  holds a tapped value: `onReorder` is a transaction, so clearing the transforms
+  on pointer-up would snap the row back to where it started and leave it there
+  for the whole round-trip. The dropped order is adopted in the same render the
+  transforms clear — laying the row out where it already appears to be — and
+  released when the real list agrees, or when someone else moves the list out
+  from under it. While the write is in flight `items` still reads as it did
+  before the drop, which is what lets those two comparisons tell the cases apart
+  without waiting on the write at all. Reconciled **during render**, not in an
+  effect: it is adjusting state because a prop arrived. A failed write reverts
+  by dropping the held order, which is why every `onReorder` that reports an
+  error must also rethrow.
+- The player view renders standings two ways — `list` or `track` — chosen by a
+  toggle and remembered per device in `localStorage` (key
+  `formulad:standingsMode`, deliberately unchanged across the renames so no
+  tablet silently loses its preference), read through
+  `useSyncExternalStore` so SSR and hydration agree without an effect.
+  `TrackView` draws `positionOrder` as cars on a strip of asphalt travelling up
+  the screen, leader nearest the flag. **It is a second rendering, not a second
+  source of truth**: cars are evenly spaced because the app models no board
+  state, so a car's real location is unknowable and nothing on that screen
+  claims otherwise. The only other axis drawn is laps, which is real data.
+  Dragging a car emits the same `setPositionOrder` mutation the list does.
+- Car identity (`lib/cars.ts`) is **derived, not stored** — a 1–2 character
+  label from the display name and a colour from a hash of the player id, both
+  assigned over the ids *sorted* so nothing reshuffles when someone overtakes.
+  Storing `carLabel`/`carColour` on the player would mean a setup screen and a
+  migration, and two cars could still collide; `assignCars` guarantees
+  uniqueness within a race instead. Pure, like `lib/scoring.ts`.
 
 ## Verification
 
 ```bash
-npm run smoke         # 57 end-to-end checks against the real project
+npm run smoke         # 145 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 
@@ -197,8 +442,29 @@ nudging, per-car laps, manual correction.
   - **Done:** UI pass over the two interactive screens — drag-to-reorder
     standings, mid-race retirement that skips a car's turns, a reverse gear for
     a mis-tapped turn, and global nav. `table`/`entry` became `device`/`edit`.
-  - **Next:** race history and player pages (both are views over the same
-    `result` data), then post-game review to confirm the finishing order before
+  - **Done:** optional track visualisation on the player view — cars drawn
+    top-down travelling up the screen, drag to reorder, tap a name for lap and
+    DNF. Order-only by design; the no-board-state rule stands.
+  - **Done:** the renames — `device` → `player`, `edit` → `results` — and the
+    root split: `/` is the player landing, `/admin` is the commissioner's.
+  - **Done:** rewinding a turn now resets the clock and leaves it paused.
+  - **Done:** the player view is a route with subviews and a bottom tab bar,
+    and the first subview is history — the event log read back as sentences.
+  - **Done:** the car status card — tires, brakes, gearbox, engine, body, nitro
+    as pegs under My racer. Off by default, spec configurable in Firestore.
+  - **Done:** My Racer — a player claims their car on their own phone, and the
+    claim is shared state so two people can't pick the same one. A player who
+    isn't on the grid can put their own name in from the same screen.
+  - **Done:** a note per car in the results view — usually why they retired.
+  - **Done:** race deletion, from race settings and behind a named confirmation
+    that says it will rewrite the season table.
+  - **Done:** a between-rounds pause — the table confirms the order before the
+    next round's clock starts. On by default, switchable in race settings.
+  - **Done:** a race settings subview, and `scheduled` given real meaning —
+    races start unstarted, the grid is editable until Start race drops the
+    flag, and the roster locks after that.
+  - **Next:** season-level player pages (a view over the same `result` data
+    across races), then post-game review to confirm the finishing order before
     a race is sealed.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
     rules tighten — right now any signed-in caller can write anything, which

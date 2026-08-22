@@ -28,7 +28,59 @@ export interface Season {
   startDate: Timestamp;
 }
 
+/**
+ * `scheduled` is a real state, not a placeholder: createRace leaves the race
+ * unstarted with its clock stopped, and an explicit startRace drops the flag.
+ * That window is when the roster can be edited — and it is what makes joining
+ * a race before it begins coherent.
+ */
 export type RaceStatus = "scheduled" | "live" | "complete";
+
+/** One tracked property of the car status card. */
+export interface CarStatusProperty {
+  key: string;
+  label: string;
+  /**
+   * What an untouched car has. Distinct from `max` because upgrades let a car
+   * carry more than it starts with — tires start at 6 on a card that holds 14.
+   *
+   * Optional, and falls back to `max`: specs written before starts existed
+   * simply began full. Read it through `startOf`, never directly.
+   */
+  start?: number;
+  /** The most this property can hold. */
+  max: number;
+}
+
+/**
+ * The dice range a gear rolls. Config rather than code for the same reason the
+ * spec is: house variants exist and changing one must not need a deploy.
+ */
+export interface GearRange {
+  gear: number;
+  min: number;
+  max: number;
+}
+
+/**
+ * Per-race feature toggles. Optional, and absent means off, so races created
+ * before a toggle existed keep working untouched.
+ */
+export interface RaceSettings {
+  /** Stop on nobody's turn between rounds so the table can confirm order. */
+  betweenRounds?: boolean;
+  /**
+   * The car status card. Configured per race rather than in code, following
+   * the scoringConfig precedent: maxima vary by house variant and changing one
+   * must not need a deploy.
+   */
+  carStatus?: {
+    enabled: boolean;
+    spec: CarStatusProperty[];
+    /** Absent falls back to the default set. */
+    gears?: GearRange[];
+  };
+}
 
 /**
  * The finishing order, denormalized onto the race document by finishRace in the
@@ -53,6 +105,8 @@ export interface Race {
   status: RaceStatus;
   /** Laps required to finish. Each lap spans many rounds. */
   lapCount: number;
+  /** Absent on races created before toggles existed; absent means off. */
+  settings?: RaceSettings;
   /** Present only once the race is complete. Absent on live/scheduled races. */
   result?: RaceResult;
 }
@@ -81,6 +135,53 @@ export interface Participant {
   lapsCompleted: number;
   finalPosition: number | null;
   dnf: boolean;
+  /**
+   * Remaining values on the car status card, by property key.
+   *
+   * A key absent means full — nothing is backfilled, so a participant that
+   * predates the feature reads as an undamaged car.
+   *
+   * This is NOT board state. The app never derives anything from these numbers
+   * and never enforces a rule with them: it is a shared counter standing in for
+   * a piece of cardboard, the way the standings list stands in for looking at
+   * the table. Keep it that way — the moment something validates a move against
+   * remaining tires, this becomes a board model and the rejection in AGENTS.md
+   * applies.
+   */
+  carStatus?: Record<string, number>;
+  /**
+   * Which gear the car is in, or absent for none.
+   *
+   * Like carStatus, a shared counter and not a board model: nothing derives
+   * from it and nothing validates a move against it. It stands in for the gear
+   * lever the way the standings list stands in for looking at the table.
+   */
+  gear?: number | null;
+  /**
+   * The anonymous auth uid that has claimed this racer, or null/absent.
+   *
+   * Shared state, not a device preference: "a player cannot pick a racer
+   * someone else already picked" is a fact about the race, so it cannot live
+   * in localStorage. The uid is stable per device, which is exactly the
+   * granularity wanted — one phone, one racer.
+   *
+   * "My racer" itself is never stored: it is the participant whose claimedBy
+   * matches this device's uid, derived the same way standings and car identity
+   * are, so the two halves cannot disagree.
+   */
+  claimedBy?: string | null;
+  /**
+   * Free text about this car's race — usually why it didn't finish.
+   *
+   * Deliberately NOT a DNF-only reason field: "blew the engine on lap 3" and
+   * "won it on the last corner" are the same shape of data, so one note avoids
+   * a second schema later. It also survives un-retiring, where a reason tied to
+   * the flag would either be orphaned or silently destroyed.
+   *
+   * Not on RaceResult: that is a scoring cache, and notes are not scoring
+   * input — computeStandings stays a pure function of finishes.
+   */
+  note?: string;
 }
 
 /**
@@ -104,10 +205,36 @@ export interface LiveState {
   currentPlayerId: PlayerId | null;
   turnStartedAt: Timestamp | null;
   turnDurationMs: number;
+  /**
+   * The race's configured turn length. Distinct from turnDurationMs, which
+   * pauseTurn overwrites with whatever time was left — so without this there
+   * is no record of what a full turn is, and nothing to reset the clock to.
+   *
+   * Optional: races created before the field existed simply lack it, and every
+   * reader falls back to turnDurationMs. There are no migrations here.
+   */
+  turnDurationDefaultMs?: number;
   /** One round = every car has moved once. Many rounds make a lap. */
   currentRound: number;
   positionOrder: PlayerId[];
   roundOrder: PlayerId[];
+  /**
+   * Which half of the loop the race is in. Absent means "turn", so races that
+   * predate the between-rounds interstitial behave exactly as they did.
+   *
+   * "betweenRounds" is nobody's turn on purpose: every car has moved, the next
+   * round's order has been snapshotted, and the table is looking at it before
+   * the clock starts again.
+   */
+  phase?: "turn" | "betweenRounds";
+  /**
+   * Mirror of races/{id}.settings.betweenRounds, kept here so advanceTurn can
+   * read the toggle from the document it already has. Same denormalization
+   * bargain as `retired` below: the race doc stays the place it is edited,
+   * updateRaceSettings writes both in one transaction, and the hot path keeps
+   * costing one read.
+   */
+  betweenRounds?: boolean;
   /**
    * Cars that have retired. Mirrored onto participants/{id}.dnf, but kept here
    * too so advanceTurn can skip them from a single document read rather than
@@ -131,7 +258,13 @@ export type EventSource = "manual" | "chat" | "system";
 
 interface BaseEvent {
   id: string;
-  at: Timestamp;
+  /**
+   * NULL until the server acknowledges the write. `at` is a serverTimestamp and
+   * the persistent local cache surfaces the write immediately, so every event
+   * this device appends renders once with no timestamp. Typed nullable so a
+   * reader that forgets fails the typecheck rather than at the table.
+   */
+  at: Timestamp | null;
   /** Chat-sourced entries are the ones most likely to be wrong; keep them labelled. */
   source: EventSource;
   actor: string | null;
@@ -153,11 +286,26 @@ export interface TurnAdvancedEvent extends BaseEvent {
   round: number;
 }
 
-/** Emitted when the order wraps and a fresh snapshot of standings is taken. */
+/**
+ * Emitted when a round actually begins — the clock starts and the leader is up.
+ * With the between-rounds interstitial on, that is a separate moment from the
+ * previous round ending, which is why roundEnded exists.
+ */
 export interface RoundStartedEvent extends BaseEvent {
   type: "roundStarted";
   round: number;
   order: PlayerId[];
+}
+
+/**
+ * Every car has moved and the race has stopped on nobody's turn so the table
+ * can confirm the order. Only ever emitted when the interstitial is on —
+ * without it, a round ends and the next begins in the same instant.
+ */
+export interface RoundEndedEvent extends BaseEvent {
+  type: "roundEnded";
+  /** The round that just finished. */
+  round: number;
 }
 
 /** An overtake: standings changed, taking effect from the next round. */
@@ -183,6 +331,101 @@ export interface DnfChangedEvent extends BaseEvent {
   type: "dnfChanged";
   playerId: PlayerId;
   dnf: boolean;
+}
+
+/** The flag drops: the race leaves `scheduled` and the clock is anchored. */
+export interface RaceStartedEvent extends BaseEvent {
+  type: "raceStarted";
+  /** The grid as it stood at the start, after any roster edits. */
+  order: PlayerId[];
+}
+
+/**
+ * A partial edit of RaceSettings, one level deeper than Partial<> reaches.
+ * Switching car status on must not require restating the spec beside it —
+ * updateRaceSettings writes nested settings by dot path precisely so it
+ * doesn't.
+ */
+export interface RaceSettingsPatchShape {
+  betweenRounds?: boolean;
+  carStatus?: {
+    enabled?: boolean;
+    spec?: CarStatusProperty[];
+    gears?: GearRange[];
+  };
+}
+
+/**
+ * A change to how the race is configured. Carries only the fields that
+ * actually changed, so the log reads as a diff rather than a snapshot.
+ */
+export interface RaceSettingsChangedEvent extends BaseEvent {
+  type: "raceSettingsChanged";
+  patch: {
+    track?: string;
+    lapCount?: number;
+    turnSeconds?: number;
+    settings?: RaceSettingsPatchShape;
+  };
+}
+
+/**
+ * A car taken off the grid before the start. Only possible while `scheduled` —
+ * unpicking a player from a race in progress means rewriting three ordered
+ * lists and possibly the current turn, which is why it is locked rather than
+ * merely discouraged.
+ */
+export interface PlayerRemovedEvent extends BaseEvent {
+  type: "playerRemoved";
+  playerId: PlayerId;
+}
+
+/**
+ * Someone added themselves to the race. Joining mid-race enters positionOrder
+ * only — the joiner starts taking turns next round.
+ */
+export interface PlayerJoinedEvent extends BaseEvent {
+  type: "playerJoined";
+  playerId: PlayerId;
+  name: string;
+}
+
+/** A device claimed a racer as its own. */
+export interface RacerClaimedEvent extends BaseEvent {
+  type: "racerClaimed";
+  playerId: PlayerId;
+  uid: string;
+}
+
+/** A device gave a racer back. */
+export interface RacerReleasedEvent extends BaseEvent {
+  type: "racerReleased";
+  playerId: PlayerId;
+  uid: string;
+}
+
+/** A car changed gear. Null means the lever was cleared. */
+export interface GearChangedEvent extends BaseEvent {
+  type: "gearChanged";
+  playerId: PlayerId;
+  from: number | null;
+  to: number | null;
+}
+
+/** One property of a car's status card was changed. */
+export interface CarStatusChangedEvent extends BaseEvent {
+  type: "carStatusChanged";
+  playerId: PlayerId;
+  key: string;
+  from: number;
+  to: number;
+}
+
+/** Commentary on one car's race. An empty note is a clearing, and is logged. */
+export interface ParticipantNoteSetEvent extends BaseEvent {
+  type: "participantNoteSet";
+  playerId: PlayerId;
+  note: string;
 }
 
 /** A mis-tapped turn, stepped back. Appended like any other mutation. */
@@ -220,11 +463,21 @@ export interface CorrectionEvent extends BaseEvent {
 
 export type RaceEvent =
   | RaceCreatedEvent
+  | RaceStartedEvent
+  | RaceSettingsChangedEvent
+  | PlayerRemovedEvent
+  | PlayerJoinedEvent
   | TurnAdvancedEvent
   | RoundStartedEvent
+  | RoundEndedEvent
   | PositionOrderChangedEvent
   | LapCompletedEvent
   | DnfChangedEvent
+  | ParticipantNoteSetEvent
+  | CarStatusChangedEvent
+  | GearChangedEvent
+  | RacerClaimedEvent
+  | RacerReleasedEvent
   | TurnRewoundEvent
   | TurnPausedEvent
   | TurnResumedEvent

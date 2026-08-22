@@ -1,8 +1,9 @@
 "use client";
 
-import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
+import { collection, doc, limit, onSnapshot, orderBy, query } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
-import { db } from "./firebase";
+import { app, db } from "./firebase";
 import { liveDoc } from "./race";
 import { computeStandings } from "./scoring";
 import { seasonDoc } from "./seasons";
@@ -12,6 +13,7 @@ import type {
   Player,
   PlayerId,
   Race,
+  RaceEvent,
   Season,
 } from "./types";
 
@@ -81,18 +83,82 @@ export function useParticipants(raceId: string) {
   return participants;
 }
 
-export function useRaces() {
+/**
+ * The races listener, with the first-snapshot flag exposed. The landing page
+ * needs it: races start as an empty array, so without it a player arriving on
+ * a slow connection reads "no race yet" for a moment before their race appears
+ * — which is exactly the wrong thing to tell someone who came to play.
+ */
+export function useRaceList() {
   const [races, setRaces] = useState<Race[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const q = query(collection(db, "races"), orderBy("scheduledAt", "desc"));
     const unsubscribe = onSnapshot(q, (snap) => {
       setRaces(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Race));
+      setLoading(false);
     });
     return unsubscribe;
   }, []);
 
-  return races;
+  return { races, loading };
+}
+
+export function useRaces() {
+  return useRaceList().races;
+}
+
+/**
+ * One race document. Separate from the live doc on purpose: status, track,
+ * lapCount and the feature toggles change rarely, while the live doc changes
+ * every turn — two listeners means a settings read doesn't ride along with
+ * every tick of the game.
+ */
+export function useRace(raceId: string) {
+  const [race, setRace] = useState<Race | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, "races", raceId), (snap) => {
+      setRace(snap.exists() ? ({ id: snap.id, ...snap.data() } as Race) : null);
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, [raceId]);
+
+  return { race, loading };
+}
+
+/**
+ * The race's event log, newest first. One listener, like every other hook here.
+ *
+ * Capped rather than unbounded: a long race is thousands of turnAdvanced
+ * events and the history view is something you scroll, not something you audit
+ * — the log itself stays complete in Firestore either way.
+ *
+ * `at` is a serverTimestamp, so it is NULL in the local snapshot until the
+ * server acknowledges the write. With the persistent cache on, every event
+ * this device writes renders once that way. Callers must not assume it is set.
+ */
+export function useRaceEvents(raceId: string, max = 300) {
+  const [events, setEvents] = useState<RaceEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, "races", raceId, "events"),
+      orderBy("at", "desc"),
+      limit(max),
+    );
+    const unsubscribe = onSnapshot(q, (snap) => {
+      setEvents(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as RaceEvent));
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, [raceId, max]);
+
+  return { events, loading };
 }
 
 /**
@@ -128,6 +194,24 @@ export function useStandings(seasonId: string) {
   );
 
   return { standings, season, loading };
+}
+
+/**
+ * This device's anonymous auth uid — the identity AuthGate already establishes.
+ *
+ * Read through a hook rather than calling getAuth() ad-hoc from components, so
+ * there is one place that knows where identity comes from when Phase 2 swaps
+ * anonymous sessions for real accounts.
+ */
+export function useUid() {
+  const [uid, setUid] = useState<string | null>(null);
+
+  useEffect(
+    () => onAuthStateChanged(getAuth(app), (user) => setUid(user?.uid ?? null)),
+    [],
+  );
+
+  return uid;
 }
 
 /**

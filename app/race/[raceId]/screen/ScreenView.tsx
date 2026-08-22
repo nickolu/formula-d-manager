@@ -1,11 +1,18 @@
 "use client";
 
-import { useLiveState, useNow, useParticipants, usePlayers } from "@/lib/hooks";
+import {
+  useLiveState,
+  useNow,
+  useParticipants,
+  usePlayers,
+  useRace,
+} from "@/lib/hooks";
 import { formatRemaining, readTimer } from "@/lib/timer";
 import StaleRace from "@/app/StaleRace";
 
 export default function ScreenView({ raceId }: { raceId: string }) {
   const { live, loading, error } = useLiveState(raceId);
+  const { race } = useRace(raceId);
   const players = usePlayers();
   const participants = useParticipants(raceId);
   const now = useNow();
@@ -15,8 +22,57 @@ export default function ScreenView({ raceId }: { raceId: string }) {
 
   if (loading) return <Centered>Connecting…</Centered>;
   if (error) return <Centered>Connection error: {error.message}</Centered>;
-  if (!live) return <Centered>No live race here yet.</Centered>;
+  if (!live) return <Centered>Race not found.</Centered>;
   if (!live.positionOrder || !live.roundOrder) return <StaleRace />;
+
+  // Before the flag drops there is no turn and no running clock. Showing the
+  // usual layout would read as PAUSED, which is a different thing.
+  if (race?.status === "scheduled") {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center gap-10 bg-black p-10 text-white">
+        <p className="text-4xl uppercase tracking-widest text-neutral-500">
+          {race.track} — starting grid
+        </p>
+        <ol className="flex flex-col gap-3 text-5xl">
+          {live.positionOrder.map((id, i) => (
+            <li key={id}>
+              <span className="mr-6 text-neutral-600">{i + 1}</span>
+              {nameOf(id)}
+            </li>
+          ))}
+        </ol>
+      </main>
+    );
+  }
+
+  // Absent on races created before retirement was modelled.
+  const retired = new Set(live.retired ?? []);
+
+  // Nobody's turn means two different things — the race is over, or it is
+  // between rounds. Discriminate on status, never on the null player. A big
+  // screen showing nobody's turn with no explanation reads as a bug from
+  // across the room, which is why this state gets its own rendering.
+  if (race?.status !== "complete" && live.phase === "betweenRounds") {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center gap-8 bg-black p-10 text-white">
+        <p className="text-4xl uppercase tracking-widest text-neutral-500">
+          Round {live.currentRound - 1} done
+        </p>
+        <p className="text-7xl font-semibold">Check the order</p>
+        <ol className="flex flex-col gap-3 text-5xl text-neutral-300">
+          {live.roundOrder.map((id, i) => (
+            <li key={id} className={retired.has(id) ? "text-neutral-700 line-through" : undefined}>
+              <span className="mr-6 text-neutral-600">{i + 1}</span>
+              {nameOf(id)}
+            </li>
+          ))}
+        </ol>
+        <p className="text-3xl text-neutral-500">
+          Round {live.currentRound} starts on the tablet
+        </p>
+      </main>
+    );
+  }
 
   // Expiry carries no mechanical consequence — this is pure social pressure.
   const timerColor = timer.isExpired
@@ -28,9 +84,6 @@ export default function ScreenView({ raceId }: { raceId: string }) {
   const turnIndex = live.currentPlayerId
     ? live.roundOrder.indexOf(live.currentPlayerId)
     : -1;
-
-  // Absent on races created before retirement was modelled.
-  const retired = new Set(live.retired ?? []);
 
   return (
     <main className="flex min-h-screen flex-col justify-between bg-black p-10 text-white">

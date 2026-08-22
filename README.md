@@ -28,12 +28,20 @@ firebase apps:sdkconfig WEB
 
 | Screen | Who looks at it | URL |
 |---|---|---|
-| **Table** | shared tablet, passed nobody, tapped by whoever just moved | `/race/<id>/table` |
+| **Player** | anyone playing — their phone, or the shared tablet | `/race/<id>/player` |
 | **Screen** | the TV — big timer and standings | `/race/<id>/screen` |
-| **Entry** | corrections and finishing the race | `/race/<id>/entry` |
+| **Results** | corrections and finishing the race | `/race/<id>/results` |
 
-Create a race from `/`, enter players in starting grid order, then open the table
-and screen views on separate devices.
+Older bookmarks still work: `/table` and `/device` redirect to `/player`,
+`/entry` and `/edit` to `/results`.
+
+`/` is the player landing — a list of races, tap one to land in it. That is the
+only URL anyone needs. The commissioner's tools live at `/admin`.
+
+Create a race from `/admin`, enter players in starting grid order, then open the
+player and screen views on separate devices. A new race starts **scheduled**
+with its clock stopped — edit the grid and the settings, then tap **Start race**
+on the player view to drop the flag. The roster locks once it is running.
 
 During play:
 
@@ -53,7 +61,7 @@ at zero, and nothing happens mechanically — it's social pressure only.
 ```bash
 npm run dev     # dev server
 npm run build   # production build
-npm run smoke   # 24 end-to-end checks against the real Firestore project
+npm run smoke   # 145 end-to-end checks against the real Firestore project
 npm run lint
 ```
 
