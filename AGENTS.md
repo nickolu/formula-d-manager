@@ -68,24 +68,39 @@ rounds. And laps are *per car* — the leader can be on lap 2 while a back marke
 is on lap 1 — so `currentRound` is global on the live doc while `lapsCompleted`
 lives on each participant. There is no global lap counter, deliberately.
 
-The app does **not** model the board: no car positions, no gear, no wear tokens.
-Humans nudge the standings when an overtake happens. Adding board state was
-explicitly rejected — it re-implements the game and can desync from the table.
+The app does **not** model the board: no car positions, no move validation, no
+computing what a roll allows. Humans nudge the standings when an overtake
+happens. Adding board state was explicitly rejected — it re-implements the game
+and can desync from the table.
 
-**The car status card is not a reversal of that.** `Participant.carStatus` is a
-shared counter standing in for a piece of cardboard, the way the standings list
-stands in for looking at the table. The distinction that keeps it honest: the
+**The car status card and the gear lever are not a reversal of that**, and the
+line between them and the rejection is worth stating precisely, because it is
+easy to cross by accident. `Participant.carStatus` and `Participant.gear` are
+shared counters standing in for a piece of cardboard and a lever, the way the
+standings list stands in for looking at the table. What keeps them honest: the
 app never *derives* anything from those numbers and never enforces a rule with
-them, so nothing can desync. **Keep it that way** — the moment something
-validates a move against remaining tires, this becomes a board model and the
-rejection above applies. It is off by default, and its maxima live in
-`races/{id}.settings.carStatus.spec` in Firestore rather than in code, following
-the `scoringConfig` precedent: house variants must not need a deploy. A key
-absent from a participant's `carStatus` means *full* — nothing is backfilled.
-`setCarStatus` clamps to `0..max` and refuses an unknown key **in `lib/race.ts`**,
-not only in the UI, because every caller — the Phase 3 chatbot included — has to
-hit the same limit. There are deliberately no permissions: anyone can change
-anyone's card, exactly as anyone can reach across the table and move your pegs.
+them, so nothing can desync — a wrong value is wrong on a screen, not wrong in
+the game. **Keep it that way.** The moment something validates a move against
+remaining tires, or checks a roll against the current gear's range, this becomes
+a board model and the rejection above applies. The gear ranges are *printed*
+next to the lever, exactly as they are printed on the card; nothing reads them.
+
+(An earlier version of this file listed "no gear" among the rejected state. That
+was the right call for a gear the app *acted on* and the wrong wording for a
+gear it merely displays. The distinction above is the rule.)
+
+The card is off by default. Its spec and gear ranges live in
+`races/{id}.settings.carStatus` in Firestore rather than in code, following the
+`scoringConfig` precedent: house variants must not need a deploy, and a race
+keeps whatever it was created with. Each property carries a `start` (what an
+undamaged car has) *and* a `max` (the most it can hold once upgraded) — they
+differ, so a key absent from a participant's `carStatus` means **`start`**, not
+full, read through `startOf`. `setCarStatus` clamps to `0..max` and refuses an
+unknown key **in `lib/race.ts`**, not only in the UI, because every caller — the
+Phase 3 chatbot included — has to hit the same limit; `setGear` refuses a gear
+the race's set doesn't define. There are deliberately no permissions: anyone can
+change anyone's card, exactly as anyone can reach across the table and move your
+pegs.
 
 **Retirement is live state, not a finishing attribute.** A car that breaks on
 lap 1 stops taking turns immediately, so `setDnf` writes `participants/{id}.dnf`
@@ -356,7 +371,7 @@ it already exists so it can never clobber a scoring table tuned in the console.
 ## Verification
 
 ```bash
-npm run smoke         # 137 end-to-end checks against the real project
+npm run smoke         # 145 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 

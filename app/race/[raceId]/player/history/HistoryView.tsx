@@ -188,6 +188,10 @@ function describe(event: RaceEvent, nameOf: (id: PlayerId) => string): string {
         : `Note on ${nameOf(event.playerId)} cleared.`;
     case "carStatusChanged":
       return `${nameOf(event.playerId)}: ${event.key} ${event.from} → ${event.to}.`;
+    case "gearChanged":
+      return event.to === null
+        ? `${nameOf(event.playerId)} came out of gear.`
+        : `${nameOf(event.playerId)} shifted to ${event.to}${event.from === null ? "" : ` (from ${event.from})`}.`;
     case "racerClaimed":
       return `${nameOf(event.playerId)} was claimed by a player's device.`;
     case "racerReleased":

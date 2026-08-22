@@ -23,6 +23,22 @@ cannot desync the game because nothing consults it. **Keep it that way** — the
 moment something validates a move against remaining tires, this becomes a board
 model and the rejection applies. Record this distinction in `AGENTS.md`.
 
+## Amended after shipping, at the user's direction
+
+- **The real card values**, replacing the seeded guess. Each property has a
+  *starting* value and a *maximum*, which differ because upgrades let a car
+  carry more than it starts with: tires 6/14, brakes 3/7, transmission 3/7,
+  body 3/7, engine 3/7, suspension 2/7. So `CarStatusProperty` gained `start`,
+  and "a key absent means full" became "a key absent means `start`".
+  `gearbox` became `transmission` and `nitro` became `suspension`.
+- **The gear lever**, with each gear's dice range printed under it: 1 (1–2),
+  2 (2–4), 3 (4–8), 4 (7–12), 5 (11–20), 6 (21–30). `Participant.gear`, set by
+  `setGear`, with the ranges in `settings.carStatus.gears` alongside the spec.
+  `AGENTS.md` listed "no gear" among the rejected board state; that was right
+  for a gear the app *acts on* and wrong for one it merely displays, and the
+  file now draws that line explicitly. Nothing reads the ranges — they are
+  printed, exactly as they are on the card.
+
 ## Configurable, not hardcoded
 
 Maxima vary by house variant (the user's card has tires at 30). Follow the

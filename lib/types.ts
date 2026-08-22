@@ -40,7 +40,25 @@ export type RaceStatus = "scheduled" | "live" | "complete";
 export interface CarStatusProperty {
   key: string;
   label: string;
-  /** Full value. Varies by house variant, which is why it isn't in code. */
+  /**
+   * What an untouched car has. Distinct from `max` because upgrades let a car
+   * carry more than it starts with — tires start at 6 on a card that holds 14.
+   *
+   * Optional, and falls back to `max`: specs written before starts existed
+   * simply began full. Read it through `startOf`, never directly.
+   */
+  start?: number;
+  /** The most this property can hold. */
+  max: number;
+}
+
+/**
+ * The dice range a gear rolls. Config rather than code for the same reason the
+ * spec is: house variants exist and changing one must not need a deploy.
+ */
+export interface GearRange {
+  gear: number;
+  min: number;
   max: number;
 }
 
@@ -59,6 +77,8 @@ export interface RaceSettings {
   carStatus?: {
     enabled: boolean;
     spec: CarStatusProperty[];
+    /** Absent falls back to the default set. */
+    gears?: GearRange[];
   };
 }
 
@@ -129,6 +149,14 @@ export interface Participant {
    * applies.
    */
   carStatus?: Record<string, number>;
+  /**
+   * Which gear the car is in, or absent for none.
+   *
+   * Like carStatus, a shared counter and not a board model: nothing derives
+   * from it and nothing validates a move against it. It stands in for the gear
+   * lever the way the standings list stands in for looking at the table.
+   */
+  gear?: number | null;
   /**
    * The anonymous auth uid that has claimed this racer, or null/absent.
    *
@@ -323,6 +351,7 @@ export interface RaceSettingsPatchShape {
   carStatus?: {
     enabled?: boolean;
     spec?: CarStatusProperty[];
+    gears?: GearRange[];
   };
 }
 
@@ -373,6 +402,14 @@ export interface RacerReleasedEvent extends BaseEvent {
   type: "racerReleased";
   playerId: PlayerId;
   uid: string;
+}
+
+/** A car changed gear. Null means the lever was cleared. */
+export interface GearChangedEvent extends BaseEvent {
+  type: "gearChanged";
+  playerId: PlayerId;
+  from: number | null;
+  to: number | null;
 }
 
 /** One property of a car's status card was changed. */
@@ -438,6 +475,7 @@ export type RaceEvent =
   | DnfChangedEvent
   | ParticipantNoteSetEvent
   | CarStatusChangedEvent
+  | GearChangedEvent
   | RacerClaimedEvent
   | RacerReleasedEvent
   | TurnRewoundEvent

@@ -9,8 +9,14 @@ import {
   useRace,
   useUid,
 } from "@/lib/hooks";
-import { claimRacer, joinRace, releaseRacer, setCarStatus } from "@/lib/race";
-import { carStatusSpecFor } from "@/lib/setup";
+import {
+  claimRacer,
+  joinRace,
+  releaseRacer,
+  setCarStatus,
+  setGear,
+} from "@/lib/race";
+import { carStatusSpecFor, gearsFor } from "@/lib/setup";
 import type { PlayerId } from "@/lib/types";
 import RacerOverview from "./RacerOverview";
 
@@ -66,9 +72,9 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
   // `enabled` is the only switch. The spec falls back to the default, because a
   // race created before the card existed has none — switching it on would
   // otherwise appear to do nothing at all.
-  const carStatusSpec = race?.settings?.carStatus?.enabled
-    ? carStatusSpecFor(race)
-    : undefined;
+  const cardOn = race?.settings?.carStatus?.enabled ?? false;
+  const carStatusSpec = cardOn ? carStatusSpecFor(race) : undefined;
+  const gears = cardOn ? gearsFor(race) : undefined;
 
   const overviewFor = (id: PlayerId) => (
     <RacerOverview
@@ -86,6 +92,10 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
           () => setCarStatus(raceId, id, key, value, { source: "manual" }),
           false,
         )
+      }
+      gears={gears}
+      onSetGear={(gear) =>
+        run(() => setGear(raceId, id, gear, { source: "manual" }), false)
       }
     />
   );

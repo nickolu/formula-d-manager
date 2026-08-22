@@ -1,6 +1,6 @@
 import { collection, doc, serverTimestamp, writeBatch } from "firebase/firestore";
 import { db } from "./firebase";
-import type { CarStatusProperty, Race } from "./types";
+import type { CarStatusProperty, GearRange, Race } from "./types";
 
 /** Player ids are slugs of their name so the same human is stable across races. */
 export function playerId(name: string): string {
@@ -12,17 +12,36 @@ export function playerId(name: string): string {
 }
 
 /**
- * A sensible starting card. Tires at 30 matches the card in use here; the rest
- * are the usual three. Config, not code — this is only the seed.
+ * The card in use here: what a car starts with, and the most it can hold once
+ * upgraded. Config, not code — this is only the seed, and a race keeps whatever
+ * spec it was created with, exactly like scoringConfig.
  */
 export const DEFAULT_CAR_STATUS_SPEC: CarStatusProperty[] = [
-  { key: "tires", label: "Tires", max: 30 },
-  { key: "brakes", label: "Brakes", max: 3 },
-  { key: "gearbox", label: "Gearbox", max: 3 },
-  { key: "engine", label: "Engine", max: 3 },
-  { key: "body", label: "Body", max: 3 },
-  { key: "nitro", label: "Nitro", max: 2 },
+  { key: "tires", label: "Tires", start: 6, max: 14 },
+  { key: "brakes", label: "Brakes", start: 3, max: 7 },
+  { key: "transmission", label: "Transmission", start: 3, max: 7 },
+  { key: "body", label: "Body", start: 3, max: 7 },
+  { key: "engine", label: "Engine", start: 3, max: 7 },
+  { key: "suspension", label: "Suspension", start: 2, max: 7 },
 ];
+
+/** The dice range each gear rolls. */
+export const DEFAULT_GEARS: GearRange[] = [
+  { gear: 1, min: 1, max: 2 },
+  { gear: 2, min: 2, max: 4 },
+  { gear: 3, min: 4, max: 8 },
+  { gear: 4, min: 7, max: 12 },
+  { gear: 5, min: 11, max: 20 },
+  { gear: 6, min: 21, max: 30 },
+];
+
+/**
+ * What an untouched car has of a property. Falls back to `max` for specs
+ * written before starts existed, where full was the only value there was.
+ */
+export function startOf(property: CarStatusProperty): number {
+  return property.start ?? property.max;
+}
 
 /**
  * The spec a race actually uses.
@@ -38,6 +57,14 @@ export function carStatusSpecFor(
 ): CarStatusProperty[] {
   const spec = race?.settings?.carStatus?.spec;
   return spec && spec.length > 0 ? spec : DEFAULT_CAR_STATUS_SPEC;
+}
+
+/** The gear set a race uses, falling back the same way the spec does. */
+export function gearsFor(
+  race: Pick<Race, "settings"> | null | undefined,
+): GearRange[] {
+  const gears = race?.settings?.carStatus?.gears;
+  return gears && gears.length > 0 ? gears : DEFAULT_GEARS;
 }
 
 export interface NewRaceInput {
@@ -82,7 +109,11 @@ export async function createRace(input: NewRaceInput): Promise<string> {
       // Off by default; the spec is seeded so a race can be switched on
       // without anyone having to author one. Edit it in the Firestore console
       // for a house variant — that is the point of it not being in code.
-      carStatus: { enabled: false, spec: DEFAULT_CAR_STATUS_SPEC },
+      carStatus: {
+        enabled: false,
+        spec: DEFAULT_CAR_STATUS_SPEC,
+        gears: DEFAULT_GEARS,
+      },
     },
   });
 

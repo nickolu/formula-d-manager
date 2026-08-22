@@ -10,7 +10,7 @@ import {
   type Transaction,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import { carStatusSpecFor, playerId as slugFor } from "./setup";
+import { carStatusSpecFor, gearsFor, playerId as slugFor, startOf } from "./setup";
 import type {
   EventSource,
   LiveState,
@@ -635,8 +635,8 @@ export async function setCarStatus(
     if (!property) throw new Error(`No car status property "${key}"`);
 
     const current = snap.data() as Participant;
-    // Absent means full — the card starts undamaged and nothing is backfilled.
-    const from = current.carStatus?.[key] ?? property.max;
+    // Absent means the property's starting value — nothing is backfilled.
+    const from = current.carStatus?.[key] ?? startOf(property);
     const to = Math.max(0, Math.min(property.max, Math.round(value)));
     if (from === to) return;
 
@@ -648,6 +648,36 @@ export async function setCarStatus(
       from,
       to,
     });
+  });
+}
+
+/**
+ * Puts a car in a gear, or clears the lever with null.
+ *
+ * Same bargain as the status card: a shared counter standing in for the gear
+ * lever, never something the app derives from or validates a move against. The
+ * gear set is per-race config, so a house variant needs no deploy.
+ */
+export async function setGear(
+  raceId: string,
+  playerId: PlayerId,
+  gear: number | null,
+  who: Actor,
+) {
+  await runTransaction(db, async (tx) => {
+    const race = await readRace(tx, raceId);
+    const snap = await tx.get(participantDoc(raceId, playerId));
+    if (!snap.exists()) throw new Error(`${playerId} is not in this race`);
+
+    if (gear !== null && !gearsFor(race).some((g) => g.gear === gear)) {
+      throw new Error(`No gear ${gear} on this car`);
+    }
+
+    const from = (snap.data() as Participant).gear ?? null;
+    if (from === gear) return;
+
+    tx.update(participantDoc(raceId, playerId), { gear });
+    appendEvent(tx, raceId, who, { type: "gearChanged", playerId, from, to: gear });
   });
 }
 

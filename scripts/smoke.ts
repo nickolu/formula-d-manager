@@ -37,6 +37,7 @@ import {
   rewindTurn,
   setCarStatus,
   setDnf,
+  setGear,
   setParticipantNote,
   setPositionOrder,
   startRace,
@@ -532,15 +533,20 @@ async function main() {
   check("switching it on leaves the spec beside it alone", (withCard.settings?.carStatus?.spec?.length ?? 0) > 0, `${withCard.settings?.carStatus?.spec?.length}`);
   check("the between-rounds toggle is untouched by it", withCard.settings?.betweenRounds === false, `${withCard.settings?.betweenRounds}`);
 
-  await setCarStatus(raceId, "alpha", "tires", 20, { source: "manual" });
-  check("a value persists", (await statusOf("alpha")).tires === 20, `${(await statusOf("alpha")).tires}`);
+  await setCarStatus(raceId, "alpha", "tires", 10, { source: "manual" });
+  check("a value persists", (await statusOf("alpha")).tires === 10, `${(await statusOf("alpha")).tires}`);
   // Clamped HERE, not only in the UI — the limit on the card is the only rule
-  // there is, and every caller has to hit it.
+  // there is, and every caller has to hit it. The ceiling is `max`, not the
+  // starting value: upgrades let a car carry more than it starts with.
   await setCarStatus(raceId, "alpha", "tires", 999, { source: "manual" });
-  check("a value over the max clamps to it", (await statusOf("alpha")).tires === 30, `${(await statusOf("alpha")).tires}`);
+  check("a value clamps to max, above the starting value", (await statusOf("alpha")).tires === 14, `${(await statusOf("alpha")).tires}`);
   await setCarStatus(raceId, "alpha", "tires", -5, { source: "manual" });
   check("a negative value clamps to zero", (await statusOf("alpha")).tires === 0, `${(await statusOf("alpha")).tires}`);
-  check("an untouched property stays absent, meaning full", (await statusOf("alpha")).engine === undefined);
+  check("an untouched property stays absent, meaning its starting value", (await statusOf("alpha")).engine === undefined);
+  // Proves absent reads as `start` rather than `max`: setting brakes to its
+  // start is a no-op, so nothing is written and no event is appended.
+  await setCarStatus(raceId, "charlie", "brakes", 3, { source: "manual" });
+  check("setting a property to its starting value writes nothing", (await statusOf("charlie")).brakes === undefined);
   await rejects(
     () => setCarStatus(raceId, "alpha", "wings", 1, { source: "manual" }),
     "an unknown property is refused",
@@ -554,7 +560,29 @@ async function main() {
   await updateDoc(raceDoc(raceId), { "settings.carStatus.spec": deleteField() });
   await setCarStatus(raceId, "bravo", "tires", 7, { source: "manual" });
   check("a race with no spec falls back to the default one", (await statusOf("bravo")).tires === 7, `${(await statusOf("bravo")).tires}`);
+  await rejects(
+    () => setCarStatus(raceId, "bravo", "gearbox", 1, { source: "manual" }),
+    "a property the default spec dropped is refused",
+  );
   await updateDoc(raceDoc(raceId), { "settings.carStatus.spec": DEFAULT_CAR_STATUS_SPEC });
+
+  console.log("\nthe gear lever:");
+  const gearOf = async (id: string) =>
+    ((await getDoc(doc(db, "races", raceId, "participants", id))).data() as Participant)
+      .gear ?? null;
+  check("a car starts in no gear", (await gearOf("alpha")) === null);
+  await setGear(raceId, "alpha", 4, { source: "manual" });
+  check("a gear persists", (await gearOf("alpha")) === 4, `${await gearOf("alpha")}`);
+  await setGear(raceId, "alpha", null, { source: "manual" });
+  check("the lever clears", (await gearOf("alpha")) === null);
+  await rejects(
+    () => setGear(raceId, "alpha", 9, { source: "manual" }),
+    "a gear the car doesn't have is refused",
+  );
+  await rejects(
+    () => setGear(raceId, "delta", 1, { source: "manual" }),
+    "a gear on a car that isn't in the race is refused",
+  );
 
   console.log("\nnotes:");
   const noteOf = async (id: string) =>

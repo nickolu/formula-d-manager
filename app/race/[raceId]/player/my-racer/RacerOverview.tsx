@@ -1,7 +1,7 @@
 "use client";
 
 import { readableInk, type Car } from "@/lib/cars";
-import type { CarStatusProperty, Participant } from "@/lib/types";
+import type { CarStatusProperty, GearRange, Participant } from "@/lib/types";
 import CarStatusCard from "./CarStatusCard";
 
 /**
@@ -19,6 +19,8 @@ export default function RacerOverview({
   position,
   carStatusSpec,
   onSetCarStatus,
+  gears,
+  onSetGear,
   busy = false,
 }: {
   name: string;
@@ -30,6 +32,8 @@ export default function RacerOverview({
   /** Absent when the race has car status switched off. */
   carStatusSpec?: CarStatusProperty[];
   onSetCarStatus?: (key: string, value: number) => void;
+  gears?: GearRange[];
+  onSetGear?: (gear: number | null) => void;
   busy?: boolean;
 }) {
   return (
@@ -59,19 +63,26 @@ export default function RacerOverview({
         <Stat label="Laps" value={String(participant?.lapsCompleted ?? 0)} />
       </dl>
 
-      {carStatusSpec && carStatusSpec.length > 0 && onSetCarStatus && (
-        <div className="rounded-xl border border-neutral-800 p-3">
-          <p className="mb-3 text-xs uppercase tracking-widest text-neutral-500">
-            Car
-          </p>
-          <CarStatusCard
-            spec={carStatusSpec}
-            values={participant?.carStatus}
-            onSet={onSetCarStatus}
-            disabled={busy}
-          />
-        </div>
-      )}
+      {carStatusSpec &&
+        carStatusSpec.length > 0 &&
+        onSetCarStatus &&
+        gears &&
+        onSetGear && (
+          <div className="rounded-xl border border-neutral-800 p-3">
+            <p className="mb-3 text-xs uppercase tracking-widest text-neutral-500">
+              Car
+            </p>
+            <CarStatusCard
+              spec={carStatusSpec}
+              values={participant?.carStatus}
+              onSet={onSetCarStatus}
+              gears={gears}
+              gear={participant?.gear ?? null}
+              onSetGear={onSetGear}
+              disabled={busy}
+            />
+          </div>
+        )}
 
       {participant?.note && (
         <div className="rounded-xl border border-neutral-800 p-3">
