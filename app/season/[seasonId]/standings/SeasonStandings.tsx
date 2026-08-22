@@ -16,7 +16,7 @@ export default function SeasonStandings({ seasonId }: { seasonId: string }) {
     <main className="mx-auto w-full max-w-2xl p-5">
       <Nav />
       <h1 className="text-3xl font-semibold">Standings</h1>
-      <SeasonHeader season={season} />
+      <SeasonHeader season={season} teamsHref={`/season/${seasonId}/teams`} />
       <StandingsTable seasonId={seasonId} />
     </main>
   );

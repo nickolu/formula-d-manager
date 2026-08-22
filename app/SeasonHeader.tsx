@@ -21,10 +21,13 @@ import type { Season } from "@/lib/types";
 export default function SeasonHeader({
   season,
   standingsHref,
+  teamsHref,
 }: {
   season: Season | null;
   /** Where "standings" goes. Absent hides the link — an unknown season has none. */
   standingsHref?: string;
+  /** Where "teams" goes. Hidden when the season has teams off. */
+  teamsHref?: string;
 }) {
   const { seasons } = useSeasons();
   const router = useRouter();
@@ -56,6 +59,14 @@ export default function SeasonHeader({
       {standingsHref && (
         <Link href={standingsHref} className="text-sm text-emerald-500">
           standings
+        </Link>
+      )}
+
+      {/* Only when there is something behind it — a link to a page that says
+          "teams are off" is worse than no link. */}
+      {teamsHref && season?.teamConfig?.enabled && (
+        <Link href={teamsHref} className="text-sm text-emerald-500">
+          teams
         </Link>
       )}
     </div>

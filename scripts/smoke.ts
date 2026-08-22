@@ -1150,6 +1150,26 @@ async function main() {
     ((await getDoc(teamDoc(seasonId, teamA))).data() as Team).members.length === 3,
   );
 
+  // The soft check the player path passes. Not security — there is no auth to
+  // enforce one with — but it is the constraint that holds at a table.
+  await rejects(
+    () =>
+      renameTeam(seasonId, teamB, "Not mine", { source: "manual" }, leftover),
+    "a racer cannot rename a team they are not on",
+  );
+  await renameTeam(
+    seasonId,
+    teamA,
+    "Smoke Crimson",
+    { source: "manual" },
+    leftover,
+  );
+  check(
+    "...but can rename their own",
+    ((await getDoc(teamDoc(seasonId, teamA))).data() as Team).name ===
+      "Smoke Crimson",
+  );
+
   // Shrinking teamSize must not kick anyone out.
   await updateTeamConfig(seasonId, { teamSize: 1 }, { source: "manual" });
   check(

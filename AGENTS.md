@@ -421,6 +421,22 @@ with, the same honesty as `/admin` not being hidden. What `lib/` enforces is the
 soft check that actually works at a table: a player may edit the team they are
 on. Say so wherever it is read, so nobody later mistakes it for security.
 
+**The player's team panel lives inside My racer, not in a fourth tab.** The
+panel has to know who *you* are, and that is the claim — a standalone Team tab
+would open on "claim a racer first", which is the My racer screen with extra
+steps. `PlayerTabs` stays three tabs. `app/TeamPanel.tsx` is rendered twice from
+one component: under the car card during a race, where teammates show live
+position, laps and DNF, and standing alone at `/season/:id/teams` between game
+nights, where the racer is resolved from the *season* claim because there is no
+race to derive one from. Do not fork it — join, leave and rename are the same
+paths in both places.
+
+**"Leave team" is muted, small, and on its own**, the same reasoning as the
+reverse gear: a rare action that undoes something must not sit beside a target a
+thumb is aimed at all evening. Full teams stay **visible and disabled** rather
+than hidden, for the same reason a claimed racer does — hiding one makes a
+player think their friend's team is missing.
+
 The admin assigns through a **slot grid** — one card per team showing `teamSize`
 slots, an empty slot tapping to a picker of unassigned members. Not a dropdown
 per player: with teams of two and a known roster it is a handful of taps, and an
@@ -739,8 +755,10 @@ nudging, per-car laps, manual correction.
   - **Done:** teams, admin side — `teamConfig` in Firestore, the palette and its
     colour-claim map, the slot grid, and both denormalized invariants with
     concurrency covered by the smoke test.
-  - **Next:** teams on a player's phone, then the two-table standings rebuild.
-    The arc is laid out in `docs/seasons-and-teams.md`.
+  - **Done:** teams on a player's phone — the panel under the car card and the
+    same panel standing alone at `/season/:id/teams`.
+  - **Next:** the standings rebuild — drivers and constructors in one view.
+    Laid out in `docs/seasons-and-teams.md`.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
     rules tighten — right now any signed-in caller can write anything, which
     suits a living room and not a public site. Decided: **Google sign-in**, with

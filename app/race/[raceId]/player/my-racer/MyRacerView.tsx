@@ -23,6 +23,7 @@ import {
 } from "@/lib/seasons";
 import { carStatusSpecFor, gearsFor } from "@/lib/setup";
 import type { PlayerId } from "@/lib/types";
+import TeamPanel from "@/app/TeamPanel";
 import RacerOverview from "./RacerOverview";
 
 /**
@@ -167,6 +168,18 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
           >
             Change racer
           </button>
+
+          {/* Below the car card rather than in a fourth tab: the panel has to
+              know who you are, and that is the claim. A standalone Team tab
+              would open on "claim a racer first" — this screen, with extra
+              steps. It renders nothing at all when teams are off. */}
+          {race?.seasonId && (
+            <TeamPanel
+              seasonId={race.seasonId}
+              playerId={mine}
+              race={{ positionOrder: order, participants, retired }}
+            />
+          )}
         </>
       ) : (
         <>

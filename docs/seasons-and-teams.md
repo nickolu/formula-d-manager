@@ -1,8 +1,8 @@
 # Seasons and teams — the model
 
-Status: **steps 1–5 shipped** (seasons, the roster, player-side scoping,
-backfill/amend, and teams admin-side — items 13–17). Steps 6–7 are still
-proposal. Written before code so the arguments happen here rather than in
+Status: **steps 1–6 shipped** (seasons, the roster, player-side scoping,
+backfill/amend, and teams on both sides — items 13–18). Step 7, the standings
+rebuild, is still proposal. Written before code so the arguments happen here rather than in
 a diff.
 
 ## What this changes about the one idea
@@ -526,8 +526,9 @@ Each step leaves the app working.
 5. ~~**Teams, admin side**~~ — **done.** `teamConfig` written by dot path,
    `DEFAULT_TEAM_PALETTE`, `lib/teams.ts` with both denormalized invariants,
    the slot grid, and smoke coverage for both concurrency races.
-6. **Teams, player side** — join/leave/rename in My racer and
-   `/season/:id/teams`.
+6. ~~**Teams, player side**~~ — **done.** `app/TeamPanel.tsx`, rendered under
+   the car card in My racer and standing alone at `/season/:id/teams`, with the
+   soft "you edit the team you are on" check in `lib/teams.ts`.
 7. **Standings rebuild** — `computeTeamStandings` and the two-table view with
    sorting and leader marks. `finishRace` is untouched by any of this.
 

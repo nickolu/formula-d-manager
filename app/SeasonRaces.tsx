@@ -31,6 +31,7 @@ export default function SeasonRaces({ seasonId }: { seasonId?: string }) {
       <SeasonHeader
         season={season}
         standingsHref={id ? `/season/${id}/standings` : undefined}
+        teamsHref={id ? `/season/${id}/teams` : undefined}
       />
 
       {loading ? (

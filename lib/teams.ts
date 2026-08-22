@@ -129,11 +129,31 @@ export async function createTeam(
   return ref.id;
 }
 
+/**
+ * `requirePlayer` is the soft check the player path passes: **a racer may edit
+ * the team they are on.**
+ *
+ * This is NOT security, and must not be mistaken for it. There is no real auth
+ * until Phase 2 — the same honesty as `/admin` not being hidden and the car
+ * status card having no permissions — so nothing stops a determined caller from
+ * omitting it. What it is, is the constraint that actually holds at a table:
+ * you edit your own team, not somebody else's. The admin path omits it.
+ */
+function requireMembership(
+  members: PlayerId[],
+  requirePlayer: PlayerId | undefined,
+) {
+  if (requirePlayer && !members.includes(requirePlayer)) {
+    throw new Error("You can only change the team you are on");
+  }
+}
+
 export async function renameTeam(
   seasonId: string,
   teamId: string,
   name: string,
   who: Actor,
+  requirePlayer?: PlayerId,
 ) {
   const trimmed = name.trim();
   if (!trimmed) throw new Error("A team needs a name");
@@ -141,6 +161,7 @@ export async function renameTeam(
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(teamDoc(seasonId, teamId));
     if (!snap.exists()) throw new Error("That team is gone");
+    requireMembership((snap.data().members ?? []) as PlayerId[], requirePlayer);
 
     tx.update(teamDoc(seasonId, teamId), { name: trimmed });
     appendSeasonEvent(tx, seasonId, who, {
@@ -161,11 +182,13 @@ export async function recolourTeam(
   teamId: string,
   colorKey: string,
   who: Actor,
+  requirePlayer?: PlayerId,
 ) {
   await runTransaction(db, async (tx) => {
     const season = await readSeason(tx, seasonId);
     const snap = await tx.get(teamDoc(seasonId, teamId));
     if (!snap.exists()) throw new Error("That team is gone");
+    requireMembership((snap.data().members ?? []) as PlayerId[], requirePlayer);
 
     const config = teamConfigFor(season);
     if (!config.palette.some((c) => c.key === colorKey)) {
