@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { useState, useSyncExternalStore } from "react";
 import {
   useLiveState,
@@ -142,6 +144,73 @@ export default function PlayerView({ raceId }: { raceId: string }) {
         </p>
 
         {actionError && <p className="text-center text-red-500">{actionError}</p>}
+      </main>
+    );
+  }
+
+  // A sealed race is a record, not a game in progress. It used to fall straight
+  // through to the live controls below — Next turn, the clock, the reverse gear
+  // — all of which happily kept mutating a finished race. Its own screen, for
+  // the same reason `scheduled` has one: everything below assumes a race that
+  // is actually being played.
+  //
+  // `lib/race.ts` refuses those mutations too. A screen that merely hides a
+  // button is not the same as a rule.
+  if (race?.status === "complete") {
+    // The sealed result is the record; the live doc's order agrees with it, but
+    // an amendment rewrites `result` and this should follow the amendment.
+    const order = race.result?.order ?? live.positionOrder;
+    const dnf = new Set(race.result?.dnf ?? live.retired ?? []);
+
+    return (
+      <main className="flex flex-col gap-6 p-4">
+        <div className="text-center">
+          <p className="text-xs uppercase tracking-widest text-neutral-500">
+            Final result
+          </p>
+          <p className="mt-1 text-2xl font-semibold">{race.track}</p>
+          <p className="mt-1 text-sm text-neutral-500">
+            This race is finished. Nothing here can be changed.
+          </p>
+        </div>
+
+        <ol className="flex flex-col gap-1">
+          {order.map((id, i) => {
+            const out = dnf.has(id);
+            return (
+              <li
+                key={id}
+                className={`flex items-center gap-3 rounded-2xl border p-3 ${
+                  i === 0 && !out
+                    ? "border-emerald-800 bg-emerald-950/30"
+                    : "border-neutral-800"
+                }`}
+              >
+                <span className="w-6 text-neutral-500">{i + 1}</span>
+                <span className="min-w-0 flex-1 truncate text-lg">
+                  {i === 0 && !out && <span title="Winner">👑 </span>}
+                  {nameOf(id)}
+                </span>
+                <span className="shrink-0 text-sm text-neutral-500">
+                  {participants.get(id)?.lapsCompleted ?? 0} laps
+                </span>
+                {out && (
+                  <span className="shrink-0 rounded bg-red-950 px-2 py-0.5 text-xs text-red-300">
+                    DNF
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+
+        {/* Where a finished race actually leads: what it did to the season. */}
+        <Link
+          href={`/season/${race.seasonId}/standings`}
+          className="rounded-2xl border border-neutral-700 py-4 text-center text-lg active:bg-neutral-800"
+        >
+          Season standings
+        </Link>
       </main>
     );
   }
@@ -318,9 +387,10 @@ export default function PlayerView({ raceId }: { raceId: string }) {
   );
 
   // Nobody's turn means two different things: the race is over, or it is
-  // between rounds. Discriminate on status, never on the null player.
-  const finished = race?.status === "complete";
-  const between = !finished && live.phase === "betweenRounds";
+  // between rounds. Discriminate on status, never on the null player — which
+  // the `complete` branch above already did, so by here the only remaining
+  // reason for nobody to be up is the interstitial.
+  const between = live.phase === "betweenRounds";
 
   if (between) {
     return (

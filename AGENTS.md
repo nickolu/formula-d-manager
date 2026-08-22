@@ -690,9 +690,24 @@ it lists every race, which is what `/` wants.
   participants, then the live doc, then the race doc **last**, so a failure
   part-way leaves a findable race rather than orphaned subcollections. It is
   not a transaction because Firestore has no client-side recursive delete.
-- **`advanceTurn` deliberately does not check the race status.** It is the hot
-  path — once per turn, per race — and adding a race-doc read would double its
-  cost to guard against something no screen offers.
+- **A sealed race refuses the clock and the turn, and the guard is conditional
+  so the hot path keeps costing one read.** `advanceTurn` used to skip the
+  status check entirely, on the grounds that it is the hot path and no screen
+  offered the button on a finished race. The second half was wrong: the player
+  view fell straight through to the live controls once a race was sealed, so
+  Next turn, resume and the reverse gear all kept mutating a finished race.
+  `refuseIfOver` keeps the original bargain rather than reversing it — a race in
+  progress always has a `currentPlayerId`, so a normal turn still costs exactly
+  one document read, and only "nobody's turn" pays for a second one to tell
+  *over* from *between rounds*. That is precisely the ambiguity this file warns
+  must not be resolved from the live doc alone. It guards `advanceTurn`,
+  `startRound`, `rewindTurn`, `pauseTurn` and `resumeTurn`; notes and result
+  amendments stay editable on a sealed race, because they are corrections.
+- **A finished race has its own screen**, like `scheduled` does: the final
+  classification, the winner marked, DNFs flagged, and a way through to the
+  season standings — with no controls at all. Everything in the live branch
+  assumes a race actually being played. A screen that merely hides a button is
+  not the same as a rule, which is why `lib/` refuses those calls too.
 - **Race configuration goes through `updateRaceSettings`**, which writes the
   race doc and/or the live doc and appends one `raceSettingsChanged` event
   carrying **only the fields that changed**, so the log reads as a diff rather

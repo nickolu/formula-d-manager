@@ -234,3 +234,33 @@ function compareTeamStandings(a: TeamStanding, b: TeamStanding): number {
 
   return a.teamId.localeCompare(b.teamId);
 }
+
+/**
+ * Which team came out of one race with the most points, or null.
+ *
+ * Null when there are no teams, when nobody on a team scored, or when two teams
+ * tie — a row that announces a winner on a tie is stating something false, and
+ * omitting the line costs nothing.
+ *
+ * Attribution is current membership, like `computeTeamStandings`, and for the
+ * same reason: nobody switches teams during a season, so there is no historical
+ * team to look up.
+ */
+export function topTeamOf(
+  race: Race,
+  config: ScoringConfig,
+  teams: Team[],
+): Team | null {
+  if (!isScorable(race) || teams.length === 0) return null;
+
+  const points = scoreRace(race.result, config);
+  const totals = teams.map((team) => ({
+    team,
+    points: team.members.reduce((sum, id) => sum + (points.get(id) ?? 0), 0),
+  }));
+
+  const ranked = totals.sort((a, b) => b.points - a.points);
+  if (ranked[0].points === 0) return null;
+  if (ranked[1] && ranked[1].points === ranked[0].points) return null;
+  return ranked[0].team;
+}

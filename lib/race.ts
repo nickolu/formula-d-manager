@@ -62,6 +62,28 @@ async function readRace(tx: Transaction, raceId: string): Promise<Race> {
 }
 
 /**
+ * Refuses a turn or clock mutation on a race that is over.
+ *
+ * The extra read is **conditional, on purpose**. `advanceTurn` is the hot path
+ * — once per turn, per race — and the decision not to spend a race-doc read
+ * guarding it stands. That decision rested on "no screen offers this on a
+ * finished race", which turned out to be wrong: the player view fell straight
+ * through to the live-race controls once a race was sealed.
+ *
+ * This keeps the original bargain rather than reversing it. A race in progress
+ * always has a `currentPlayerId`, so a normal turn still costs exactly one
+ * document read. Only "nobody's turn" pays for a second one — and that is
+ * precisely the state AGENTS.md warns must not be resolved from the live doc
+ * alone, because it means two different things: the race is over, or it is
+ * between rounds.
+ */
+async function refuseIfOver(tx: Transaction, raceId: string, live: LiveState) {
+  if (live.currentPlayerId) return;
+  const race = await readRace(tx, raceId);
+  if (race.status === "complete") throw new Error("This race is over");
+}
+
+/**
  * Drops the flag. A race is created `scheduled` with its clock stopped so the
  * roster can be edited and latecomers can join; this is the explicit moment it
  * becomes live.
@@ -376,6 +398,7 @@ function nextRunner(
 export async function advanceTurn(raceId: string, who: Actor) {
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
+    await refuseIfOver(tx, raceId, live);
     if (live.roundOrder.length === 0) throw new Error("Round order is empty");
 
     const retired = new Set(live.retired ?? []);
@@ -455,6 +478,7 @@ export async function advanceTurn(raceId: string, who: Actor) {
 export async function startRound(raceId: string, who: Actor) {
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
+    await refuseIfOver(tx, raceId, live);
     if (live.phase !== "betweenRounds") throw new Error("Not between rounds");
 
     const retired = new Set(live.retired ?? []);
@@ -499,6 +523,7 @@ export async function startRound(raceId: string, who: Actor) {
 export async function rewindTurn(raceId: string, who: Actor) {
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
+    await refuseIfOver(tx, raceId, live);
 
     const retired = new Set(live.retired ?? []);
     const index = live.currentPlayerId
@@ -839,6 +864,7 @@ export async function uncompleteLap(
 export async function pauseTurn(raceId: string, who: Actor) {
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
+    await refuseIfOver(tx, raceId, live);
     if (!live.turnStartedAt) return; // already paused
 
     const elapsed = Date.now() - live.turnStartedAt.toMillis();
@@ -857,6 +883,7 @@ export async function pauseTurn(raceId: string, who: Actor) {
 export async function resumeTurn(raceId: string, who: Actor) {
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
+    await refuseIfOver(tx, raceId, live);
     if (live.turnStartedAt) return; // already running
 
     tx.update(liveDoc(raceId), {

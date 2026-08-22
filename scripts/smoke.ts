@@ -1332,6 +1332,32 @@ async function main() {
     await removeSeasonMember(seasonId, id, { source: "manual" });
   }
 
+  console.log("\na sealed race refuses the clock and the turn:");
+  // The player view used to fall straight through to the live controls once a
+  // race was finished, so these all happily kept mutating a sealed race. The
+  // guard is in lib/ and not only in the view, because every caller — the
+  // Phase 3 chatbot included — has to hit the same rule.
+  await rejects(
+    () => advanceTurn(raceId, { source: "manual" }),
+    "a finished race cannot be advanced a turn",
+  );
+  await rejects(
+    () => rewindTurn(raceId, { source: "manual" }),
+    "...or stepped back a turn",
+  );
+  await rejects(
+    () => resumeTurn(raceId, { source: "manual" }),
+    "...or have its clock restarted",
+  );
+  await rejects(
+    () => pauseTurn(raceId, { source: "manual" }),
+    "...or paused",
+  );
+  await rejects(
+    () => startRound(raceId, { source: "manual" }),
+    "...or a new round started",
+  );
+
   console.log("\nbackfilling a race the app never timed:");
   const runOn = new Date(2020, 4, 17);
   const backfilledId = await backfillRace({

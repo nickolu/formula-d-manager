@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { usePlayers, useRaceList } from "@/lib/hooks";
-import type { PlayerId, Race, RaceStatus } from "@/lib/types";
+import { usePlayers, useRaceList, useSeason, useTeams } from "@/lib/hooks";
+import { topTeamOf } from "@/lib/scoring";
+import { teamConfigFor } from "@/lib/teams";
+import type { PlayerId, Race, RaceStatus, Team } from "@/lib/types";
 
 /**
  * One component, two renderings — not two components. `useRaceList`, the
@@ -27,6 +29,14 @@ export default function RaceList({
   // race, which is the only thing here that needs a player's display name.
   const players = usePlayers();
   const nameOf = (id: PlayerId) => players.get(id)?.displayName ?? id;
+  // For "top team" on a finished race. Both are documents these pages already
+  // stream elsewhere, and teamConfigFor resolves a season with teams off.
+  const { season } = useSeason(seasonId);
+  const { teams } = useTeams(seasonId);
+  const topTeam = (race: Race) =>
+    season && teamConfigFor(season).enabled
+      ? topTeamOf(race, season.scoringConfig, teams)
+      : null;
 
   if (variant === "admin") {
     if (loading) return <p className="text-neutral-500">Loading races…</p>;
@@ -37,7 +47,7 @@ export default function RaceList({
         </p>
       );
     }
-    return <AdminRows races={races} nameOf={nameOf} />;
+    return <AdminRows races={races} nameOf={nameOf} topTeam={topTeam} />;
   }
 
   if (loading) {
@@ -62,7 +72,12 @@ export default function RaceList({
       {current.length > 0 ? (
         <ul className="flex flex-col gap-3">
           {current.map((race) => (
-            <PlayerRow key={race.id} race={race} nameOf={nameOf} />
+            <PlayerRow
+              key={race.id}
+              race={race}
+              nameOf={nameOf}
+              topTeam={topTeam(race)}
+            />
           ))}
         </ul>
       ) : (
@@ -80,7 +95,13 @@ export default function RaceList({
           </summary>
           <ul className="flex flex-col gap-2 p-3 pt-0">
             {past.map((race) => (
-              <PlayerRow key={race.id} race={race} nameOf={nameOf} muted />
+              <PlayerRow
+                key={race.id}
+                race={race}
+                nameOf={nameOf}
+                topTeam={topTeam(race)}
+                muted
+              />
             ))}
           </ul>
         </details>
@@ -99,11 +120,19 @@ export default function RaceList({
  * the list is already streaming, because `result` is the finishing-order cache
  * `finishRace` writes.
  */
-function raceFacts(race: Race, nameOf: (id: PlayerId) => string): string {
+function raceFacts(
+  race: Race,
+  nameOf: (id: PlayerId) => string,
+  topTeam: Team | null,
+): string {
   // Null until the server acknowledges a just-created race: scheduledAt is a
   // serverTimestamp and the persistent cache surfaces the write first.
   const when = race.scheduledAt?.toDate?.();
 
+  // Deliberately silent about `backfilled`. The flag still records that the app
+  // never timed this race — that is unrecoverable otherwise — but at the table
+  // nobody is telling those two kinds of race apart, and a row that says so is
+  // one more thing to read past.
   return [
     // Bare, with no "on" or "scheduled for": the badge beside it already says
     // whether this date is a plan or a record.
@@ -111,10 +140,8 @@ function raceFacts(race: Race, nameOf: (id: PlayerId) => string): string {
     race.location ? `at ${race.location}` : null,
     `${race.lapCount} ${race.lapCount === 1 ? "lap" : "laps"}`,
     race.result?.order[0] ? `won by ${nameOf(race.result.order[0])}` : null,
-    race.result?.dnf.length ? `${race.result.dnf.length} retired` : null,
-    // A race the app never timed. Worth saying, because its history is two
-    // events long and its lap counts are all zero by construction.
-    race.backfilled ? "entered afterwards" : null,
+    topTeam ? `top team ${topTeam.name}` : null,
+    race.result?.dnf.length ? `${race.result.dnf.length} DNF` : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -129,10 +156,12 @@ function raceFacts(race: Race, nameOf: (id: PlayerId) => string): string {
 function PlayerRow({
   race,
   nameOf,
+  topTeam,
   muted = false,
 }: {
   race: Race;
   nameOf: (id: PlayerId) => string;
+  topTeam: Team | null;
   muted?: boolean;
 }) {
   return (
@@ -152,7 +181,7 @@ function PlayerRow({
               Without it a race that has not started yet reads as nothing but
               the word "scheduled". */}
           <span className="mt-0.5 block truncate text-sm text-neutral-500">
-            {raceFacts(race, nameOf)}
+            {raceFacts(race, nameOf, topTeam)}
           </span>
         </span>
         <StateBadge status={race.status} />
@@ -165,14 +194,21 @@ function PlayerRow({
 function AdminRows({
   races,
   nameOf,
+  topTeam,
 }: {
   races: Race[];
   nameOf: (id: PlayerId) => string;
+  topTeam: (race: Race) => Team | null;
 }) {
   return (
     <ul className="flex flex-col gap-2">
       {races.map((race) => (
-        <AdminRow key={race.id} race={race} nameOf={nameOf} />
+        <AdminRow
+          key={race.id}
+          race={race}
+          nameOf={nameOf}
+          topTeam={topTeam(race)}
+        />
       ))}
     </ul>
   );
@@ -181,9 +217,11 @@ function AdminRows({
 function AdminRow({
   race,
   nameOf,
+  topTeam,
 }: {
   race: Race;
   nameOf: (id: PlayerId) => string;
+  topTeam: Team | null;
 }) {
   return (
     <li className="rounded border border-neutral-800 p-3">
@@ -192,7 +230,7 @@ function AdminRow({
         <span className="min-w-0 flex-1 truncate font-medium">{race.track}</span>
       </div>
 
-      <p className="mt-1 text-sm text-neutral-500">{raceFacts(race, nameOf)}</p>
+      <p className="mt-1 text-sm text-neutral-500">{raceFacts(race, nameOf, topTeam)}</p>
 
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
         <Link href={`/race/${race.id}/player`} className="text-emerald-500">

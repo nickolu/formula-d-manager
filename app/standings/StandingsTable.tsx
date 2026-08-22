@@ -8,6 +8,7 @@ import {
   useSeasonMembers,
   useStandings,
   useTeamStandings,
+  useUid,
 } from "@/lib/hooks";
 import { teamConfigFor } from "@/lib/teams";
 import type { PlayerId, SeasonStanding, Team } from "@/lib/types";
@@ -58,6 +59,14 @@ export default function StandingsTable({ seasonId }: { seasonId: string }) {
   const { teamStandings, teams } = useTeamStandings(seasonId);
   const { members } = useSeasonMembers(seasonId);
   const players = usePlayers();
+  const uid = useUid();
+
+  // Derived from the season claim, never stored — the same rule "my racer"
+  // follows everywhere else. A table of a dozen names is hard to find yourself
+  // in, and yours is the row you came to look at.
+  const mine = uid
+    ? (members.find((m) => m.claimedBy === uid)?.playerId ?? null)
+    : null;
   const sort = useSyncExternalStore(
     subscribeSort,
     readSort,
@@ -225,9 +234,18 @@ export default function StandingsTable({ seasonId }: { seasonId: string }) {
                   {row.memberIds.map((id) => (
                     <li
                       key={id}
-                      className="flex justify-between gap-3 text-sm text-neutral-400"
+                      className={`flex justify-between gap-3 text-sm ${
+                        id === mine ? "text-emerald-400" : "text-neutral-400"
+                      }`}
                     >
-                      <span className="min-w-0 truncate">{nameOf(id)}</span>
+                      <span className="min-w-0 truncate">
+                        {nameOf(id)}
+                        {id === mine && (
+                          <span className="ml-2 text-xs uppercase tracking-wide">
+                            you
+                          </span>
+                        )}
+                      </span>
                       <span className="shrink-0">
                         {standings.find((s) => s.playerId === id)?.points ?? 0}
                       </span>
@@ -276,7 +294,9 @@ export default function StandingsTable({ seasonId }: { seasonId: string }) {
                 return (
                   <tr
                     key={row.playerId}
-                    className="border-b border-neutral-900"
+                    className={`border-b border-neutral-900 ${
+                      row.playerId === mine ? "bg-emerald-950/40" : ""
+                    }`}
                     // Grouping you can read without a legend. Colour is never
                     // the only signal — the Team column names it too, so this
                     // works for anyone who cannot rely on hue.
@@ -290,6 +310,14 @@ export default function StandingsTable({ seasonId }: { seasonId: string }) {
                         <span title="Leading driver">👑 </span>
                       )}
                       {nameOf(row.playerId)}
+                      {/* Said as well as shaded: the tint alone is invisible to
+                          anyone who cannot rely on colour, and it is also the
+                          one row someone scrolls looking for. */}
+                      {row.playerId === mine && (
+                        <span className="ml-2 text-xs uppercase tracking-wide text-emerald-500">
+                          you
+                        </span>
+                      )}
                     </td>
                     <td className="py-2 pr-3 text-right font-medium">
                       {row.points}
