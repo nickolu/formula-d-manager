@@ -226,6 +226,14 @@ it already exists so it can never clobber a scoring table tuned in the console.
   `rewindTurn` treats the interstitial as a boundary crossing and reuses that
   branch — in the interstitial `roundOrder` is already the *next* round's
   snapshot, so stepping back within it would be meaningless.
+- **The player view has a header saying which race it is, and a way out.** A
+  player arrives cold from a list of races, so the view has to name the race —
+  and it has to be possible to have tapped the wrong one. The paradigm that the
+  player view is self-sufficient is about never sending someone elsewhere to
+  *do* something; leaving is not doing something, and a screen with no exit is
+  a trap. `PlayerHeader` lives in the player layout so every subview gets it,
+  and it is **not** `app/Nav.tsx`: nav chrome would put standings and admin
+  links in front of a player mid-game.
 - **The reverse gear is deliberately not beside Next turn.** "Back a turn" is a
   small, muted link at the *top* of the player view, not a button in the row
   with the primary action. Next turn is tapped a few hundred times a night and

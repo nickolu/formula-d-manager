@@ -1,3 +1,4 @@
+import PlayerHeader from "./PlayerHeader";
 import PlayerTabs from "./PlayerTabs";
 
 /**
@@ -12,7 +13,10 @@ import PlayerTabs from "./PlayerTabs";
  * half.
  *
  * app/Nav.tsx is deliberately absent — it stays opt-in, and this view has its
- * own navigation. The paradigm is that players never leave the player view.
+ * own navigation: a header saying which race this is with the way back to the
+ * race list, and a tab bar for the subviews. The paradigm that a player never
+ * leaves this view is about never sending them elsewhere to *do* something;
+ * a screen with no exit is just a trap.
  */
 export default async function PlayerLayout({
   children,
@@ -25,6 +29,7 @@ export default async function PlayerLayout({
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white">
+      <PlayerHeader raceId={raceId} />
       {/* Clears the fixed tab bar, so the last row of any subview is reachable. */}
       <div className="pb-24">{children}</div>
       <PlayerTabs raceId={raceId} />
