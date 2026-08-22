@@ -72,7 +72,7 @@ export default function ResultsView({ raceId }: { raceId: string }) {
 
   if (loading) return <p className="p-8 text-neutral-400">Connecting…</p>;
   if (!live) return <p className="p-8 text-neutral-400">Race not found.</p>;
-  if (!live.positionOrder) return <StaleRace />;
+  if (!live.positionOrder) return <StaleRace raceId={raceId} />;
 
   return (
     <main className="mx-auto flex w-full max-w-xl flex-col gap-6 p-6">

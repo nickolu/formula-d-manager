@@ -25,6 +25,9 @@ export default function NewRaceForm({ seasonId }: { seasonId: string }) {
   const players = usePlayers();
 
   const [track, setTrack] = useState("");
+  const [location, setLocation] = useState("");
+  // Defaults to today, which is what a race being set up at the table is.
+  const [date, setDate] = useState(() => todayInput());
   const [lapCount, setLapCount] = useState(2);
   const [turnSeconds, setTurnSeconds] = useState(90);
   const [busy, setBusy] = useState(false);
@@ -72,6 +75,8 @@ export default function NewRaceForm({ seasonId }: { seasonId: string }) {
     try {
       const raceId = await createRace({
         track: track.trim() || "Untitled track",
+        location,
+        scheduledAt: scheduledFrom(date),
         lapCount,
         turnSeconds,
         // Names rather than ids, because ids are name slugs — createRace slugs
@@ -98,6 +103,27 @@ export default function NewRaceForm({ seasonId }: { seasonId: string }) {
           className="rounded border border-neutral-700 bg-transparent p-2"
         />
       </label>
+
+      <div className="flex flex-wrap gap-4">
+        <label className="flex min-w-40 flex-1 flex-col gap-1">
+          <span className="text-sm text-neutral-500">Whose house</span>
+          <input
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder="Nick's"
+            className="w-full rounded border border-neutral-700 bg-transparent p-2"
+          />
+        </label>
+        <label className="flex min-w-40 flex-1 flex-col gap-1">
+          <span className="text-sm text-neutral-500">Date</span>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="w-full rounded border border-neutral-700 bg-transparent p-2"
+          />
+        </label>
+      </div>
 
       <div className="flex gap-4">
         <label className="flex flex-1 flex-col gap-1">
@@ -187,4 +213,28 @@ export default function NewRaceForm({ seasonId }: { seasonId: string }) {
       {error && <p className="text-red-500">{error}</p>}
     </form>
   );
+}
+
+/** Today as the local YYYY-MM-DD an <input type="date"> expects. */
+function todayInput(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+/**
+ * The chosen day as a Date.
+ *
+ * When it is today, that means *now* rather than midnight: a race set up at the
+ * table is happening at the table, and stamping it 00:00 would tie it with
+ * anything else created the same day for ordering. Built from the parts rather
+ * than `new Date(value)`, which reads a bare YYYY-MM-DD as UTC midnight.
+ */
+function scheduledFrom(value: string): Date | undefined {
+  const [y, m, d] = value.split("-").map(Number);
+  if (!y || !m || !d) return undefined;
+  const now = new Date();
+  const isToday =
+    y === now.getFullYear() && m === now.getMonth() + 1 && d === now.getDate();
+  return isToday ? now : new Date(y, m - 1, d);
 }

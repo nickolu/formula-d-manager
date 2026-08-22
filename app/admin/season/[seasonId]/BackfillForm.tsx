@@ -20,6 +20,7 @@ export default function BackfillForm({ seasonId }: { seasonId: string }) {
 
   const [open, setOpen] = useState(false);
   const [track, setTrack] = useState("");
+  const [location, setLocation] = useState("");
   const [date, setDate] = useState("");
   const [order, setOrder] = useState<PlayerId[]>([]);
   const [absent, setAbsent] = useState<Set<PlayerId>>(new Set());
@@ -61,12 +62,14 @@ export default function BackfillForm({ seasonId }: { seasonId: string }) {
       await backfillRace({
         seasonId,
         track: track.trim() || "Untitled track",
+        location,
         scheduledAt: new Date(y, m - 1, d),
         playerNames: ran.map(nameOf),
         dnfNames: ran.filter((id) => dnf.has(id)).map(nameOf),
       });
       setStatus(`${track || "Race"} added`);
       setTrack("");
+      setLocation("");
       setDate("");
       setDnf(new Set());
     } catch (e) {
@@ -102,6 +105,15 @@ export default function BackfillForm({ seasonId }: { seasonId: string }) {
           <input
             value={track}
             onChange={(e) => setTrack(e.target.value)}
+            className="rounded border border-neutral-700 bg-transparent p-2"
+          />
+        </label>
+        <label className="flex min-w-40 flex-1 flex-col gap-1">
+          <span className="text-sm text-neutral-500">Whose house</span>
+          <input
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder="Nick's"
             className="rounded border border-neutral-700 bg-transparent p-2"
           />
         </label>

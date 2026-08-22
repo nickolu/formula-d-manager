@@ -505,6 +505,22 @@ it lists every race, which is what `/` wants.
   belong to a season that exists, so there is no coherent place to create one
   outside a season. `NewRaceForm` and `RaceList` take a `seasonId` rather than
   being forked, the same reasoning as `RaceList`'s `variant`.
+- **A race records whose house it was played at.** `Race.location` is free
+  text, not a reference to a player: the venue is usually "Nick's" but it is
+  just as often "the pub", and modelling it as a player would make the second
+  case unsayable. Optional, absent means nobody said, and an **empty string
+  clears it** rather than being refused — the same shape as a participant note,
+  and for the same reason: the clearing still appends an event. `scheduledAt`
+  was already settable in `lib/`; the forms now expose it. When the chosen day
+  is *today* the new-race form sends **now** rather than local midnight, so two
+  races created the same evening still order against each other.
+- **`deleteRace` carves out a race that can never be finished.** The "finish it
+  first" rule protects a race people are still playing, but a race whose live
+  doc predates the `positionOrder`/`roundOrder` split renders `StaleRace` on
+  every screen that could finish it — so the rule made it undeletable forever.
+  A race the app refuses to render is not one anybody is playing. `StaleRace`
+  now links to race settings instead of telling people to open the Firebase
+  console, and that screen offers the delete.
 - **The season admin's five sections are real routes**, not one stacked page and
   not a tab component holding state: `.../:seasonId`, `/roster`, `/teams`,
   `/scoring`, `/settings`, framed by a layout the way the player subviews are.

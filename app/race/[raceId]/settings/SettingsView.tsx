@@ -39,6 +39,8 @@ export default function SettingsView({ raceId }: { raceId: string }) {
   // first keystroke and then pins — the same trick the results view uses, and
   // it keeps an incoming write from yanking a half-typed value away.
   const [track, setTrack] = useState<string | null>(null);
+  const [location, setLocation] = useState<string | null>(null);
+  const [date, setDate] = useState<string | null>(null);
   const [laps, setLaps] = useState<string | null>(null);
   const [seconds, setSeconds] = useState<string | null>(null);
 
@@ -69,10 +71,20 @@ export default function SettingsView({ raceId }: { raceId: string }) {
   if (!race) return <p className="p-8 text-neutral-400">Race not found.</p>;
 
   const scheduled = race.status === "scheduled";
+  // A race whose live doc predates the positionOrder/roundOrder split can never
+  // be finished — every screen that could finish it renders StaleRace — so the
+  // "finish it first" rule would trap it here forever. deleteRace carves it out
+  // for the same reason.
+  const stale = !!live && !live.positionOrder;
+  const deletable = race.status === "complete" || stale;
   const grid = live?.positionOrder ?? [];
   const nameOf = (id: PlayerId) => players.get(id)?.displayName ?? id;
 
   const trackValue = track ?? race.track;
+  const locationValue = location ?? race.location ?? "";
+  // A <input type="date"> wants YYYY-MM-DD in LOCAL time. toISOString would
+  // convert to UTC and show the day before for an evening race west of it.
+  const dateValue = date ?? toDateInput(race.scheduledAt?.toDate?.());
   const lapsValue = laps ?? String(race.lapCount);
   const secondsValue =
     seconds ??
@@ -101,6 +113,25 @@ export default function SettingsView({ raceId }: { raceId: string }) {
             className="w-full rounded border border-neutral-700 bg-neutral-900 p-3 text-lg"
           />
         </Field>
+
+        <div className="flex flex-wrap gap-4">
+          <Field label="Whose house">
+            <input
+              value={locationValue}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="Nick's"
+              className="w-full rounded border border-neutral-700 bg-neutral-900 p-3"
+            />
+          </Field>
+          <Field label="Date played">
+            <input
+              type="date"
+              value={dateValue}
+              onChange={(e) => setDate(e.target.value)}
+              className="w-full rounded border border-neutral-700 bg-neutral-900 p-3"
+            />
+          </Field>
+        </div>
 
         <div className="flex gap-4">
           <Field label="Laps">
@@ -136,12 +167,20 @@ export default function SettingsView({ raceId }: { raceId: string }) {
                 raceId,
                 {
                   track: trackValue,
+                  location: locationValue,
                   lapCount: Number(lapsValue),
                   turnSeconds: Number(secondsValue),
+                  // Only when it parses: a half-typed date must not silently
+                  // move the race to the year 0002.
+                  ...(fromDateInput(dateValue)
+                    ? { scheduledAt: fromDateInput(dateValue)! }
+                    : {}),
                 },
                 { source: "manual" },
               );
               setTrack(null);
+              setLocation(null);
+              setDate(null);
               setLaps(null);
               setSeconds(null);
             })
@@ -198,7 +237,12 @@ export default function SettingsView({ raceId }: { raceId: string }) {
           Grid
         </h2>
 
-        {scheduled ? (
+        {stale ? (
+          <p className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-400">
+            This race predates the round-order change and has no readable grid.
+            There is nothing to edit here — delete it below.
+          </p>
+        ) : scheduled ? (
           <>
             <p className="mb-3 text-sm text-neutral-400">
               Drag to set the starting order, or take a car off the grid. This
@@ -262,7 +306,7 @@ export default function SettingsView({ raceId }: { raceId: string }) {
           Danger
         </h2>
 
-        {race.status !== "complete" ? (
+        {!deletable ? (
           <p className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-400">
             A race can only be deleted once it has been finished on the results
             screen.
@@ -275,10 +319,11 @@ export default function SettingsView({ raceId }: { raceId: string }) {
               Delete <span className="font-semibold">{race.track}</span>?
             </p>
             <p className="text-xs text-neutral-400">
-              Season standings are worked out from finished races, so removing
-              this one rewrites the table. The race&rsquo;s history is kept —
-              events can never be deleted — but nothing will be able to reach
-              it.
+              {stale
+                ? "This race predates the round-order change, so it can never be finished and nothing can show it. Deleting is the only thing left to do with it."
+                : "Season standings are worked out from finished races, so removing this one rewrites the table."}{" "}
+              The race&rsquo;s history is kept — events can never be deleted —
+              but nothing will be able to reach it.
             </p>
             <div className="flex gap-2">
               <button
@@ -291,9 +336,13 @@ export default function SettingsView({ raceId }: { raceId: string }) {
               <button
                 onClick={() =>
                   run("Deleted", async () => {
+                    const { seasonId } = race;
                     await deleteRace(raceId);
-                    // Nothing here resolves any more; the landing page does.
-                    router.push("/");
+                    // Back to the season's admin page — where this screen is
+                    // reached from, and where the next thing you do lives.
+                    // The player landing was wrong: deleting a race is
+                    // commissioner work and it does not end on a player screen.
+                    router.push(`/admin/season/${seasonId}`);
                   })
                 }
                 disabled={busy}
@@ -373,4 +422,22 @@ function Field({
       {children}
     </label>
   );
+}
+
+/** A Date as the local YYYY-MM-DD an <input type="date"> expects. */
+function toDateInput(date: Date | undefined): string {
+  if (!date) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/**
+ * The reverse. Built from the parts rather than `new Date(value)`, which reads
+ * a bare YYYY-MM-DD as UTC midnight — an evening race in a western timezone
+ * would land on the day before.
+ */
+function fromDateInput(value: string): Date | null {
+  const [y, m, d] = value.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
 }

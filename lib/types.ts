@@ -178,6 +178,21 @@ export interface Race {
   id: string;
   seasonId: string;
   track: string;
+  /**
+   * Whose house it was played at.
+   *
+   * Optional, and absent means nobody recorded one — the usual rule, so races
+   * created before the field existed still render. Free text rather than a
+   * reference to a player: the venue is often "Nick's" but it is just as often
+   * "the pub" or "Sarah's parents'", and modelling it as a player would make
+   * the second case unsayable.
+   */
+  location?: string;
+  /**
+   * When it was played, or when it is going to be. Settable rather than always
+   * the moment of creation — a race entered after the fact would otherwise
+   * sort to today and scramble the season's order.
+   */
   scheduledAt: Timestamp;
   status: RaceStatus;
   /** Laps required to finish. Each lap spans many rounds. */
@@ -390,6 +405,8 @@ interface BaseEvent {
 export interface RaceCreatedEvent extends BaseEvent {
   type: "raceCreated";
   track: string;
+  /** Absent on races created before the field existed, and when none was given. */
+  location?: string;
   lapCount: number;
   order: PlayerId[];
   turnDurationMs: number;
@@ -479,6 +496,8 @@ export interface RaceSettingsChangedEvent extends BaseEvent {
   type: "raceSettingsChanged";
   patch: {
     track?: string;
+    /** An empty string is a clearing, and is logged as one. */
+    location?: string;
     lapCount?: number;
     turnSeconds?: number;
     /** When the race was run. Editable because a backfilled date can be wrong. */

@@ -135,6 +135,9 @@ function subjectOf(event: RaceEvent): PlayerId | null {
 function describePatch(patch: RaceSettingsChangedEvent["patch"]): string {
   const parts: string[] = [];
   if (patch.track !== undefined) parts.push(`track is now ${patch.track}`);
+  if (patch.location !== undefined) {
+    parts.push(patch.location ? `played at ${patch.location}` : "location cleared");
+  }
   if (patch.lapCount !== undefined) parts.push(`${patch.lapCount} laps`);
   if (patch.turnSeconds !== undefined) parts.push(`${patch.turnSeconds}s turns`);
   if (patch.scheduledAt !== undefined) {
@@ -162,7 +165,9 @@ function describe(event: RaceEvent, nameOf: (id: PlayerId) => string): string {
 
   switch (event.type) {
     case "raceCreated":
-      return `Race created at ${event.track} — ${event.lapCount} laps, grid: ${list(event.order)}.`;
+      return `Race created at ${event.track}${
+        event.location ? `, ${event.location}` : ""
+      } — ${event.lapCount} laps, grid: ${list(event.order)}.`;
     case "raceStarted":
       return `The flag drops — grid: ${list(event.order)}.`;
     case "raceSettingsChanged":

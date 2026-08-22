@@ -106,6 +106,8 @@ export async function startRace(raceId: string, who: Actor) {
 
 export interface RaceSettingsPatch {
   track?: string;
+  /** Whose house. An empty string CLEARS it, and the clearing is logged. */
+  location?: string;
   lapCount?: number;
   /** Written to turnDurationDefaultMs; takes effect on the next turn. */
   turnSeconds?: number;
@@ -149,6 +151,15 @@ export async function updateRaceSettings(
       if (!track) throw new Error("Track cannot be empty");
       raceFields.track = track;
       applied.track = track;
+    }
+    if (patch.location !== undefined) {
+      // Empty clears it rather than being refused, the same shape as a
+      // participant note: "we wrote down the wrong house" and "we never knew
+      // whose house" are both things that need saying, and clearing it still
+      // appends an event so the log shows it happening.
+      const location = patch.location.trim();
+      raceFields.location = location;
+      applied.location = location;
     }
     if (patch.lapCount !== undefined) {
       if (!Number.isInteger(patch.lapCount) || patch.lapCount < 1) {
@@ -1062,7 +1073,17 @@ export async function deleteRace(raceId: string) {
   if (!snap.exists()) throw new Error(`No race ${raceId}`);
   const status = (snap.data() as { status?: string }).status;
   if (status !== "complete") {
-    throw new Error("Finish the race before deleting it");
+    // The "finish it first" rule protects a race people are still playing. A
+    // race whose live doc predates the positionOrder/roundOrder split can never
+    // reach `complete` — every screen that could finish it renders StaleRace
+    // instead — so applying the rule there made it undeletable forever. A race
+    // the app refuses to render is not one anybody is playing.
+    const live = await getDoc(liveDoc(raceId));
+    const unfinishable =
+      !live.exists() || !(live.data() as LiveState).positionOrder;
+    if (!unfinishable) {
+      throw new Error("Finish the race before deleting it");
+    }
   }
 
   const participants = await getDocs(collection(db, "races", raceId, "participants"));

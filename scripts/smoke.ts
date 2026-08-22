@@ -254,6 +254,8 @@ async function main() {
     // three-car race, exactly as it was before the roster was editable.
     playerNames: ["Alpha", "Bravo", "Charlie", "Delta"],
     seasonId,
+    location: "Smoke House",
+    scheduledAt: new Date(2021, 2, 4),
   });
   console.log(`\ncreated race ${raceId}\n`);
   check(
@@ -281,6 +283,12 @@ async function main() {
 
   const created = (await getDoc(doc(db, "races", raceId))).data() as Race;
   check("a new race is scheduled, not live", created.status === "scheduled", created.status);
+  check("whose house is recorded", created.location === "Smoke House", created.location);
+  check(
+    "the date given is the date stored, not the moment of creation",
+    created.scheduledAt.toDate().getFullYear() === 2021,
+    created.scheduledAt.toDate().toISOString(),
+  );
   check("an unstarted race has a stopped clock", readTimer(initial, Date.now()).isPaused);
 
   console.log("\nsettings, before the flag drops:");
@@ -297,6 +305,28 @@ async function main() {
   await rejects(
     () => updateRaceSettings(raceId, { track: "   " }, { source: "manual" }),
     "an empty track name is refused",
+  );
+
+  await updateRaceSettings(
+    raceId,
+    { location: "  Smoke Annex  ", scheduledAt: new Date(2022, 5, 6) },
+    { source: "manual" },
+  );
+  const relocated = (await getDoc(doc(db, "races", raceId))).data() as Race;
+  check(
+    "whose house is editable, and trimmed",
+    relocated.location === "Smoke Annex",
+    relocated.location,
+  );
+  check(
+    "so is the date",
+    relocated.scheduledAt.toDate().getFullYear() === 2022,
+    relocated.scheduledAt.toDate().toISOString(),
+  );
+  await updateRaceSettings(raceId, { location: "" }, { source: "manual" });
+  check(
+    "an empty location clears it rather than being refused",
+    ((await getDoc(doc(db, "races", raceId))).data() as Race).location === "",
   );
 
   mark0 = states.length;
@@ -1460,6 +1490,28 @@ async function main() {
   await rejects(
     () => deleteRace(raceId),
     "deleting a race that is already gone is refused",
+  );
+
+  console.log("\na race that can never be finished is still deletable:");
+  const staleId = await createRace({
+    track: "SMOKE-TEST stale",
+    lapCount: 1,
+    turnSeconds: TURN_SECONDS,
+    playerNames: ["Alpha"],
+    seasonId,
+  });
+  await rejects(
+    () => deleteRace(staleId),
+    "an unfinished race is refused, as it always was",
+  );
+  // What a race predating the positionOrder/roundOrder split looks like. Every
+  // screen that could finish it renders StaleRace, so without the carve-out it
+  // would be undeletable forever.
+  await updateDoc(liveDoc(staleId), { positionOrder: deleteField() });
+  await deleteRace(staleId);
+  check(
+    "...but one with no usable live state is not",
+    !(await getDoc(raceDoc(staleId))).exists(),
   );
 
   console.log("\ncleaning up the season:");

@@ -99,7 +99,7 @@ export default function PlayerView({ raceId }: { raceId: string }) {
   if (error) return <p className="p-8 text-red-500">{error.message}</p>;
   // A deleted race leaves every listener with a null snapshot.
   if (!live) return <p className="p-8 text-neutral-400">Race not found.</p>;
-  if (!live.positionOrder || !live.roundOrder) return <StaleRace />;
+  if (!live.positionOrder || !live.roundOrder) return <StaleRace raceId={raceId} />;
 
   // A scheduled race has a grid and a stopped clock but no turn order yet.
   // Everything below assumes a race in progress, so this is its own screen

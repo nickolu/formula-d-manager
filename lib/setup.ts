@@ -77,6 +77,8 @@ export function gearsFor(
 
 export interface NewRaceInput {
   track: string;
+  /** Whose house. Optional — absent means nobody said. */
+  location?: string;
   lapCount: number;
   /** Starting grid order, front to back. */
   playerNames: string[];
@@ -140,9 +142,14 @@ export async function createRace(input: NewRaceInput): Promise<string> {
     );
   });
 
+  const location = input.location?.trim();
+
   batch.set(raceRef, {
     seasonId: input.seasonId,
     track: input.track,
+    // Omitted rather than written empty: Firestore rejects undefined, and
+    // absent is the value that means "nobody said".
+    ...(location ? { location } : {}),
     scheduledAt: input.scheduledAt
       ? Timestamp.fromDate(input.scheduledAt)
       : serverTimestamp(),
@@ -196,6 +203,7 @@ export async function createRace(input: NewRaceInput): Promise<string> {
     source: "manual",
     actor: null,
     track: input.track,
+    ...(location ? { location } : {}),
     lapCount: input.lapCount,
     order: ids,
     turnDurationMs: input.turnSeconds * 1000,
@@ -220,6 +228,8 @@ export async function createRace(input: NewRaceInput): Promise<string> {
 export interface BackfillRaceInput {
   seasonId: string;
   track: string;
+  /** Whose house. Optional — absent means nobody said. */
+  location?: string;
   /** The day it was actually run. Required — that is the whole point. */
   scheduledAt: Date;
   /** Finishing order, winner first. Retired cars are included here too. */
@@ -278,6 +288,7 @@ export async function backfillRace(input: BackfillRaceInput): Promise<string> {
     if (claimedBy) claims.set(m.id, claimedBy);
   }
 
+  const location = input.location?.trim();
   const at = Timestamp.fromDate(input.scheduledAt);
   const lapCount = input.lapCount ?? 1;
   const turnMs = (input.turnSeconds ?? 90) * 1000;
@@ -295,6 +306,7 @@ export async function backfillRace(input: BackfillRaceInput): Promise<string> {
   batch.set(raceRef, {
     seasonId: input.seasonId,
     track: input.track,
+    ...(location ? { location } : {}),
     scheduledAt: at,
     status: "complete",
     lapCount,
@@ -330,6 +342,7 @@ export async function backfillRace(input: BackfillRaceInput): Promise<string> {
     source: "manual",
     actor: null,
     track: input.track,
+    ...(location ? { location } : {}),
     lapCount,
     order,
     turnDurationMs: turnMs,
