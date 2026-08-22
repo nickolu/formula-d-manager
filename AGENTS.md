@@ -234,6 +234,12 @@ it already exists so it can never clobber a scoring table tuned in the console.
   a trap. `PlayerHeader` lives in the player layout so every subview gets it,
   and it is **not** `app/Nav.tsx`: nav chrome would put standings and admin
   links in front of a player mid-game.
+- **A missing `carStatus.spec` falls back to the default.** Switching the card
+  on writes only `enabled`, so a race created before the card existed would
+  have no spec — and would render nothing while every `setCarStatus` threw.
+  `carStatusSpecFor` is the one place that resolves it, used by both the view
+  and the mutation. This is the "every reader handles the field's absence" rule
+  doing its job: an old race gets the standard card, not a broken one.
 - **The reverse gear is deliberately not beside Next turn.** "Back a turn" is a
   small, muted link at the *top* of the player view, not a button in the row
   with the primary action. Next turn is tapped a few hundred times a night and

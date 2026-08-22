@@ -30,6 +30,7 @@ import {
   joinRace,
   liveDoc,
   pauseTurn,
+  raceDoc,
   releaseRacer,
   removePlayer,
   resumeTurn,
@@ -45,7 +46,7 @@ import {
 } from "../lib/race";
 import { computeStandings, pointsFor } from "../lib/scoring";
 import { DEFAULT_SCORING } from "../lib/seasons";
-import { createRace } from "../lib/setup";
+import { createRace, DEFAULT_CAR_STATUS_SPEC } from "../lib/setup";
 import { readTimer } from "../lib/timer";
 import type { LiveState, Participant, Race } from "../lib/types";
 
@@ -544,6 +545,16 @@ async function main() {
     () => setCarStatus(raceId, "alpha", "wings", 1, { source: "manual" }),
     "an unknown property is refused",
   );
+
+  // A race created before the card existed has no spec at all, and switching
+  // the card on writes only `enabled` — so the spec has to fall back, or the
+  // toggle silently does nothing. Faked by stripping it, which only a test may
+  // do directly.
+  mark0 = states.length;
+  await updateDoc(raceDoc(raceId), { "settings.carStatus.spec": deleteField() });
+  await setCarStatus(raceId, "bravo", "tires", 7, { source: "manual" });
+  check("a race with no spec falls back to the default one", (await statusOf("bravo")).tires === 7, `${(await statusOf("bravo")).tires}`);
+  await updateDoc(raceDoc(raceId), { "settings.carStatus.spec": DEFAULT_CAR_STATUS_SPEC });
 
   console.log("\nnotes:");
   const noteOf = async (id: string) =>

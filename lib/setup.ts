@@ -1,6 +1,6 @@
 import { collection, doc, serverTimestamp, writeBatch } from "firebase/firestore";
 import { db } from "./firebase";
-import type { CarStatusProperty } from "./types";
+import type { CarStatusProperty, Race } from "./types";
 
 /** Player ids are slugs of their name so the same human is stable across races. */
 export function playerId(name: string): string {
@@ -23,6 +23,22 @@ export const DEFAULT_CAR_STATUS_SPEC: CarStatusProperty[] = [
   { key: "body", label: "Body", max: 3 },
   { key: "nitro", label: "Nitro", max: 2 },
 ];
+
+/**
+ * The spec a race actually uses.
+ *
+ * Races created before the card existed have no `settings.carStatus` at all,
+ * and switching the card on writes only `enabled` — so the spec would be
+ * missing and the card would render nothing while every setCarStatus threw.
+ * Falling back to the default is the "every reader handles the field's
+ * absence" rule: an old race gets the standard card rather than a broken one.
+ */
+export function carStatusSpecFor(
+  race: Pick<Race, "settings"> | null | undefined,
+): CarStatusProperty[] {
+  const spec = race?.settings?.carStatus?.spec;
+  return spec && spec.length > 0 ? spec : DEFAULT_CAR_STATUS_SPEC;
+}
 
 export interface NewRaceInput {
   track: string;

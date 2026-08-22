@@ -10,7 +10,7 @@ import {
   type Transaction,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import { playerId as slugFor } from "./setup";
+import { carStatusSpecFor, playerId as slugFor } from "./setup";
 import type {
   EventSource,
   LiveState,
@@ -629,7 +629,9 @@ export async function setCarStatus(
     const snap = await tx.get(participantDoc(raceId, playerId));
     if (!snap.exists()) throw new Error(`${playerId} is not in this race`);
 
-    const property = race.settings?.carStatus?.spec?.find((p) => p.key === key);
+    // Falls back to the default spec, so a race that predates the card still
+    // validates against something rather than refusing every key.
+    const property = carStatusSpecFor(race).find((p) => p.key === key);
     if (!property) throw new Error(`No car status property "${key}"`);
 
     const current = snap.data() as Participant;

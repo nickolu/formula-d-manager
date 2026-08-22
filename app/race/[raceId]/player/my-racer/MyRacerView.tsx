@@ -10,6 +10,7 @@ import {
   useUid,
 } from "@/lib/hooks";
 import { claimRacer, joinRace, releaseRacer, setCarStatus } from "@/lib/race";
+import { carStatusSpecFor } from "@/lib/setup";
 import type { PlayerId } from "@/lib/types";
 import RacerOverview from "./RacerOverview";
 
@@ -62,9 +63,12 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
     ? order.find((id) => participants.get(id)?.claimedBy === uid)
     : undefined;
 
-  // Absent or disabled means no card at all — old races are untouched.
-  const carStatus = race?.settings?.carStatus;
-  const carStatusSpec = carStatus?.enabled ? carStatus.spec : undefined;
+  // `enabled` is the only switch. The spec falls back to the default, because a
+  // race created before the card existed has none — switching it on would
+  // otherwise appear to do nothing at all.
+  const carStatusSpec = race?.settings?.carStatus?.enabled
+    ? carStatusSpecFor(race)
+    : undefined;
 
   const overviewFor = (id: PlayerId) => (
     <RacerOverview
