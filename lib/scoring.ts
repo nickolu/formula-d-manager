@@ -4,6 +4,9 @@ import type {
   RaceResult,
   ScoringConfig,
   SeasonStanding,
+  Team,
+  TeamConfig,
+  TeamStanding,
 } from "./types";
 
 /**
@@ -140,4 +143,99 @@ function compareStandings(a: SeasonStanding, b: SeasonStanding): number {
   }
 
   return a.playerId.localeCompare(b.playerId);
+}
+
+/**
+ * Constructor standings, derived the same way driver standings are — no
+ * Firestore, no clock, no I/O.
+ *
+ * **Attribution is *current* membership**, and that is not an oversight.
+ * The house rule is that nobody switches teams during a season, so there is no
+ * historical team to look up and `RaceResult` carries no team snapshot. The
+ * interesting case is what happens when someone *is* moved: under that rule it
+ * is not a transfer, it is a **correction of a recording error** — the player
+ * was always on that team and it was written down wrong. Re-deriving the whole
+ * season's team standings is exactly the right behaviour for a correction. The
+ * thing that would be a hazard in a transfer model is the desired outcome here.
+ * The trail of who moved and when lives in the season log, not in this cache.
+ *
+ * A team's name and colour are current for the same reason: a constructor that
+ * renames itself renames itself in the record books.
+ *
+ * A driver on no team contributes to no team and still appears in the drivers
+ * table. A team whose every member missed a race simply scores nothing that
+ * week.
+ */
+export function computeTeamStandings(
+  races: Race[],
+  config: ScoringConfig,
+  teams: Team[],
+  teamConfig?: Pick<TeamConfig, "scoring">,
+  seasonId?: string,
+): TeamStanding[] {
+  // Every member's own row, which is where all the scoring already happens —
+  // a team score is an aggregate of driver rows, not a second scoring rule.
+  const drivers = new Map(
+    computeStandings(
+      races,
+      config,
+      // Scoped, not left open: unscoped races would quietly fold another
+      // season's points into this one's team table — wrong rather than broken.
+      seasonId,
+      teams.flatMap((t) => t.members),
+    ).map((row) => [row.playerId, row]),
+  );
+
+  const rows = teams.map((team) => {
+    const members = team.members
+      .map((id) => drivers.get(id))
+      .filter((row): row is SeasonStanding => !!row);
+
+    const finishCounts: number[] = [];
+    let points = 0;
+    let entries = 0;
+    let wins = 0;
+
+    for (const member of members) {
+      points += member.points;
+      entries += member.races;
+      wins += member.wins;
+      member.finishCounts.forEach((n, i) => {
+        finishCounts[i] = (finishCounts[i] ?? 0) + (n ?? 0);
+      });
+    }
+
+    // "average" divides by the members who actually ENTERED, not by teamSize:
+    // dividing by a constant is a monotone transform and would rank identically
+    // to "sum", which would make the option pointless. With equal full teams it
+    // still changes nothing — it exists for the day the house rule bends.
+    if (teamConfig?.scoring === "average") {
+      const entered = members.filter((m) => m.races > 0).length;
+      points = entered > 0 ? points / entered : 0;
+    }
+
+    return {
+      teamId: team.id,
+      points,
+      finishCounts,
+      memberIds: team.members,
+      races: entries,
+      wins,
+    };
+  });
+
+  return rows.sort(compareTeamStandings);
+}
+
+/** Points, then the same countback the drivers table uses, then id for stability. */
+function compareTeamStandings(a: TeamStanding, b: TeamStanding): number {
+  if (a.points !== b.points) return b.points - a.points;
+
+  const depth = Math.max(a.finishCounts.length, b.finishCounts.length);
+  for (let i = 0; i < depth; i++) {
+    const diff = (b.finishCounts[i] ?? 0) - (a.finishCounts[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+
+  return a.teamId.localeCompare(b.teamId);
 }

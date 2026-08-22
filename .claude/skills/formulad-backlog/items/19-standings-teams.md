@@ -12,8 +12,22 @@ mark for each leader.
 `lib/scoring.ts` has no Firestore, no clock, no I/O, and that is what lets house
 rules be re-argued against past seasons. Keep it that way.
 
+**Built with a smaller signature than this spec first proposed**, and the
+change is recorded here rather than argued again later:
+
 ```ts
-computeTeamStandings(races, config, teams, members, teamConfig): TeamStanding[]
+computeTeamStandings(races, config, teams, teamConfig?, seasonId?): TeamStanding[]
+```
+
+The `members: SeasonMember[]` argument is gone. `Team.members` already answers
+"who is on this team" — it is the capacity authority item 17 denormalized, and
+it is written in the same transaction as `SeasonMember.teamId`, so passing both
+would have been passing the same fact twice. `seasonId` was *added*, because
+unscoped races would quietly fold another season's points into this one's team
+table — wrong rather than broken, which is the failure mode this item warns
+about.
+
+```ts
 
 interface TeamStanding {
   teamId: string

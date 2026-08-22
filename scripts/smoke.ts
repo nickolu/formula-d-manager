@@ -47,7 +47,11 @@ import {
   uncompleteLap,
   updateRaceSettings,
 } from "../lib/race";
-import { computeStandings, pointsFor } from "../lib/scoring";
+import {
+  computeStandings,
+  computeTeamStandings,
+  pointsFor,
+} from "../lib/scoring";
 import {
   addSeasonMember,
   claimSeasonRacer,
@@ -1199,6 +1203,80 @@ async function main() {
     "...and clears its members' teamId",
     (await getDoc(seasonMemberDoc(seasonId, leftover))).data()?.teamId === null,
   );
+  // Team standings are derived the same way driver standings are — pure, and
+  // re-derived from current membership, so a team correction re-scores the
+  // whole season on the next render rather than needing a stored snapshot.
+  const teamTable = computeTeamStandings(
+    [finished],
+    DEFAULT_SCORING,
+    [
+      {
+        id: teamA,
+        name: "Smoke Crimson",
+        colorKey: "redbull",
+        members: ["charlie", "alpha"],
+        createdAt: finished.scheduledAt,
+      },
+      {
+        id: teamB,
+        name: "Smoke Blue",
+        colorKey: "mercedes",
+        members: ["bravo"],
+        createdAt: finished.scheduledAt,
+      },
+    ],
+    { scoring: "sum" },
+    seasonId,
+  );
+  check(
+    "a team scores the sum of its drivers",
+    teamTable[0]?.teamId === teamA && teamTable[0]?.points === 18,
+    `${teamTable[0]?.teamId}=${teamTable[0]?.points}`,
+  );
+  check(
+    "a team whose only driver retired scores dnfPoints, not nothing special",
+    teamTable[1]?.points === DEFAULT_SCORING.dnfPoints,
+  );
+  const emptyTeam = computeTeamStandings(
+    [finished],
+    DEFAULT_SCORING,
+    [
+      {
+        id: "ghost",
+        name: "Ghost",
+        colorKey: "haas",
+        members: [],
+        createdAt: finished.scheduledAt,
+      },
+    ],
+    { scoring: "sum" },
+    seasonId,
+  );
+  check(
+    "a team with nobody in it renders on zero rather than throwing",
+    emptyTeam[0]?.points === 0 && emptyTeam[0]?.races === 0,
+  );
+  const averaged = computeTeamStandings(
+    [finished],
+    DEFAULT_SCORING,
+    [
+      {
+        id: teamA,
+        name: "Smoke Crimson",
+        colorKey: "redbull",
+        members: ["charlie", "alpha"],
+        createdAt: finished.scheduledAt,
+      },
+    ],
+    { scoring: "average" },
+    seasonId,
+  );
+  check(
+    "average divides by the drivers who entered, not by team size",
+    averaged[0]?.points === 9,
+    `${averaged[0]?.points}`,
+  );
+
   const seasonTypes = await seasonEventTypes(seasonId);
   check(
     "every team change is logged",

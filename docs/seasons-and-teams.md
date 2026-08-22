@@ -1,8 +1,8 @@
 # Seasons and teams — the model
 
-Status: **steps 1–6 shipped** (seasons, the roster, player-side scoping,
-backfill/amend, and teams on both sides — items 13–18). Step 7, the standings
-rebuild, is still proposal. Written before code so the arguments happen here rather than in
+Status: **shipped in full** — all seven steps, items 13–19. What follows is
+the record of why it is shaped this way; `AGENTS.md` carries the same
+rationale for anyone reading the code. Written before code so the arguments happen here rather than in
 a diff.
 
 ## What this changes about the one idea
@@ -529,8 +529,9 @@ Each step leaves the app working.
 6. ~~**Teams, player side**~~ — **done.** `app/TeamPanel.tsx`, rendered under
    the car card in My racer and standing alone at `/season/:id/teams`, with the
    soft "you edit the team you are on" check in `lib/teams.ts`.
-7. **Standings rebuild** — `computeTeamStandings` and the two-table view with
-   sorting and leader marks. `finishRace` is untouched by any of this.
+7. ~~**Standings rebuild**~~ — **done.** `computeTeamStandings` and the
+   two-table view with sorting and leader marks. `finishRace` was untouched by
+   any of it, exactly as promised.
 
 `scripts/smoke.ts` grows alongside: a season lifecycle, the member fan-out, the
 capacity and colour races (two concurrent joins, two concurrent colour claims —

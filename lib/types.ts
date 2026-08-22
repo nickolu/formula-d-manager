@@ -214,6 +214,21 @@ export interface SeasonStanding {
   finishCounts: number[];
 }
 
+/**
+ * One row of derived constructor standings. Never stored, exactly like
+ * SeasonStanding — a team change re-derives the whole season on the next render.
+ */
+export interface TeamStanding {
+  teamId: string;
+  points: number;
+  /** Sum of the members' finishCounts, so the existing countback works unchanged. */
+  finishCounts: number[];
+  memberIds: PlayerId[];
+  /** Race entries across the whole team — two members in one race counts twice. */
+  races: number;
+  wins: number;
+}
+
 export interface Participant {
   playerId: PlayerId;
   startPosition: number;

@@ -13,7 +13,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { app, db } from "./firebase";
 import { liveDoc } from "./race";
-import { computeStandings, isScorable } from "./scoring";
+import { computeStandings, computeTeamStandings, isScorable } from "./scoring";
 import {
   seasonDoc,
   seasonEventsCol,
@@ -352,6 +352,37 @@ export function useStandings(seasonId: string) {
   const racesRun = useMemo(() => races.filter(isScorable).length, [races]);
 
   return { standings, season, loading, racesRun };
+}
+
+/**
+ * Constructor standings, derived exactly the way driver standings are: a pure
+ * function of listeners that are already open, so it costs no extra reads and
+ * cannot drift from the races it summarizes.
+ *
+ * A team move re-derives the whole season here, on the next snapshot, and that
+ * is the intended behaviour — under the house rule that nobody switches teams,
+ * a move is a correction of a recording error rather than a transfer.
+ */
+export function useTeamStandings(seasonId: string) {
+  const races = useRaces(seasonId);
+  const { season, loading } = useSeason(seasonId);
+  const { teams } = useTeams(seasonId);
+
+  const teamStandings = useMemo(
+    () =>
+      season
+        ? computeTeamStandings(
+            races,
+            season.scoringConfig,
+            teams,
+            season.teamConfig,
+            seasonId,
+          )
+        : [],
+    [races, season, teams, seasonId],
+  );
+
+  return { teamStandings, teams, season, loading };
 }
 
 /**

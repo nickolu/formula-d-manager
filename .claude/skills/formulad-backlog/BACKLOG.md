@@ -30,7 +30,7 @@ fields exist.
 | 16 | 16 | Backfill and amend a race | **done** | 13, 14 |
 | 17 | 17 | Teams, admin side | **done** | 13, 14 |
 | 18 | 18 | Teams, player side | **done** | 17 |
-| 19 | 19 | Standings: drivers and constructors | `todo` | 14, 17 |
+| 19 | 19 | Standings: drivers and constructors | **done** | 14, 17 |
 
 **Land 2 and 5 together in one commit.** They are the same redirect pass and
 splitting them means editing `next.config.ts` and every internal link twice.

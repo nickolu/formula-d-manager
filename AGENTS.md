@@ -421,6 +421,31 @@ with, the same honesty as `/admin` not being hidden. What `lib/` enforces is the
 soft check that actually works at a table: a player may edit the team they are
 on. Say so wherever it is read, so nobody later mistakes it for security.
 
+**Constructor standings are derived, never stored** — the same rule as driver
+standings, and `computeTeamStandings` is a pure function beside
+`computeStandings` in `lib/scoring.ts`, which still imports nothing from
+Firestore. A team score is an *aggregate of driver rows* rather than a second
+scoring rule, so there is one place points are worked out. It takes `seasonId`
+and scopes: unscoped races would quietly fold another season's points into this
+one's team table, which is wrong rather than broken.
+
+`scoring: "average"` divides by the members who **entered** that race, not by
+`teamSize` — dividing by a constant is a monotone transform and would rank
+identically to `sum`, which would make the option pointless.
+
+The standings view is one page with a **Drivers | Constructors** segmented
+control that does not render at all when teams are off. The drivers table gains
+a 4px left border in the team's colour — grouping readable without a legend —
+but **colour is never the only signal**: the Team column names it too. Sorting
+is by column header, remembered per device in `localStorage` under
+`formulad:standingsSort`, read through `useSyncExternalStore` exactly as
+`formulad:standingsMode` is, so SSR and hydration agree without an effect. The
+crown stays on the points leader whatever the sort in force — sorting by team
+rank must not decorate whoever floats to the top — and the leading *team* gets a
+**different** mark, a colour chip with a trophy, because two crowns on one row
+reads as one thing being doubly first. The table scrolls horizontally inside its
+own container; the page never does.
+
 **The player's team panel lives inside My racer, not in a fourth tab.** The
 panel has to know who *you* are, and that is the claim — a standalone Team tab
 would open on "claim a racer first", which is the My racer screen with extra
@@ -757,8 +782,11 @@ nudging, per-car laps, manual correction.
     concurrency covered by the smoke test.
   - **Done:** teams on a player's phone — the panel under the car card and the
     same panel standing alone at `/season/:id/teams`.
-  - **Next:** the standings rebuild — drivers and constructors in one view.
-    Laid out in `docs/seasons-and-teams.md`.
+  - **Done:** the standings rebuild — drivers and constructors in one view,
+    sortable, with team colours and a mark for each leader. **The seasons and
+    teams arc is complete.**
+  - **Next:** post-game review to confirm the finishing order before a race is
+    sealed.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
     rules tighten — right now any signed-in caller can write anything, which
     suits a living room and not a public site. Decided: **Google sign-in**, with
