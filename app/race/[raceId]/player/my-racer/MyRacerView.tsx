@@ -8,7 +8,7 @@ import {
   usePlayers,
   useUid,
 } from "@/lib/hooks";
-import { claimRacer, releaseRacer } from "@/lib/race";
+import { claimRacer, joinRace, releaseRacer } from "@/lib/race";
 import type { PlayerId } from "@/lib/types";
 import RacerOverview from "./RacerOverview";
 
@@ -31,6 +31,7 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
   // Which racer's sheet is open. Not a route: it is a transient overlay on this
   // subview, and a reload landing back on the list is the right behaviour.
   const [previewing, setPreviewing] = useState<PlayerId | null>(null);
+  const [joinName, setJoinName] = useState("");
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -92,9 +93,11 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
         </>
       ) : (
         <>
-          <p className="text-sm text-neutral-400">
-            Which car is yours? Tap it to have a look first.
-          </p>
+          {order.length > 0 && (
+            <p className="text-sm text-neutral-400">
+              Which car is yours? Tap it to have a look first.
+            </p>
+          )}
           <ul className="flex flex-col gap-2">
             {order.map((id) => {
               const car = cars.get(id);
@@ -135,6 +138,35 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
               );
             })}
           </ul>
+
+          {/* Alongside the list, and in place of it when the race has nobody
+              in it — an empty list with no way to act is a dead end, and this
+              is the first screen a player sees. */}
+          <div className="flex flex-col gap-2 rounded-2xl border border-neutral-800 p-4">
+            <p className="text-sm text-neutral-400">
+              {order.length === 0
+                ? "Nobody is racing yet. Put your name in."
+                : "Not on the list? Join in — you'll start at the back."}
+            </p>
+            <input
+              value={joinName}
+              onChange={(e) => setJoinName(e.target.value)}
+              placeholder="Your name"
+              className="w-full rounded border border-neutral-700 bg-neutral-900 p-3 text-lg"
+            />
+            <button
+              onClick={() =>
+                run(async () => {
+                  await joinRace(raceId, joinName, uid, { source: "manual" });
+                  setJoinName("");
+                })
+              }
+              disabled={busy || !joinName.trim()}
+              className="rounded-2xl bg-emerald-600 py-4 text-lg font-semibold active:bg-emerald-700 disabled:opacity-40"
+            >
+              Join race
+            </button>
+          </div>
         </>
       )}
 

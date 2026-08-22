@@ -209,6 +209,13 @@ it already exists so it can never clobber a scoring table tuned in the console.
 - **Nobody's turn means two different things** — the race is over, or it is
   between rounds. Every view discriminates on `race.status === "complete"`,
   never on the null `currentPlayerId`. `finishRace` nulls it too.
+- **`joinRace` adds to `positionOrder` only, never `roundOrder`.** A late
+  arrival starts taking turns *next* round, when the rollover snapshots
+  standings — the same rule as an overtake. Splicing a car into a round already
+  underway would break the `turnIndex`/`alreadyMoved` arithmetic in the views
+  and hand the joiner a turn out of nowhere. Adding stays open once a race is
+  live even though item 6 locked removal: a late arrival is normal, unpicking
+  someone from three ordered lists mid-race is not.
 - **Identity is a claim on a participant, and "my racer" is derived.**
   `Participant.claimedBy` holds the anonymous auth uid `AuthGate` establishes —
   read through `useUid()`, never `getAuth()` from a component, so there is one
@@ -307,7 +314,7 @@ it already exists so it can never clobber a scoring table tuned in the console.
 ## Verification
 
 ```bash
-npm run smoke         # 121 end-to-end checks against the real project
+npm run smoke         # 129 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 
@@ -349,7 +356,8 @@ nudging, per-car laps, manual correction.
   - **Done:** the player view is a route with subviews and a bottom tab bar,
     and the first subview is history — the event log read back as sentences.
   - **Done:** My Racer — a player claims their car on their own phone, and the
-    claim is shared state so two people can't pick the same one.
+    claim is shared state so two people can't pick the same one. A player who
+    isn't on the grid can put their own name in from the same screen.
   - **Done:** a note per car in the results view — usually why they retired.
   - **Done:** race deletion, from race settings and behind a named confirmation
     that says it will rewrite the season table.

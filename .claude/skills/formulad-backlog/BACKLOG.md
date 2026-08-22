@@ -22,7 +22,7 @@ fields exist.
 | 8 | 9 | Delete a race | **done** | 6 |
 | 9 | 8 | Notes in results | **done** | 5 |
 | 10 | 10 | My Racer identity | **done** | 3 |
-| 11 | 10.5 | Join a race | todo | 10 |
+| 11 | 10.5 | Join a race | **done** | 10 |
 | 12 | 11 | Per-player car status | todo | 6, 10 |
 
 **Land 2 and 5 together in one commit.** They are the same redirect pass and

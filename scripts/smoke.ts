@@ -12,6 +12,7 @@
 import { getAuth, signInAnonymously } from "firebase/auth";
 import {
   collection,
+  deleteDoc,
   deleteField,
   doc,
   getDoc,
@@ -26,6 +27,7 @@ import {
   completeLap,
   deleteRace,
   finishRace,
+  joinRace,
   liveDoc,
   pauseTurn,
   releaseRacer,
@@ -438,6 +440,44 @@ async function main() {
     () => deleteRace(raceId),
     "a race that hasn't been finished cannot be deleted",
   );
+
+  console.log("\njoining a race already in progress:");
+  mark0 = states.length;
+  const roundBefore = states[states.length - 1].roundOrder.join(",");
+  const echoId = await joinRace(raceId, "  Echo  ", "smoke-uid-late", { source: "manual" });
+  const joined = await waitFor(states, (s) => s.positionOrder.includes("echo"), "echo joined", 10_000, mark0);
+  check("the name slugs to a stable id", echoId === "echo", echoId);
+  check("a joiner goes to the back of the standings", joined.positionOrder.at(-1) === "echo", joined.positionOrder.join(","));
+  // The whole point: the round in progress is untouched, exactly like an
+  // overtake. Echo starts taking turns next round.
+  check("the round in progress is not disturbed", joined.roundOrder.join(",") === roundBefore, joined.roundOrder.join(","));
+  check(
+    "the joiner holds their own claim",
+    ((await getDoc(doc(db, "races", raceId, "participants", "echo"))).data() as Participant)
+      .claimedBy === "smoke-uid-late",
+  );
+  check(
+    "the joiner starts at the back of the grid",
+    ((await getDoc(doc(db, "races", raceId, "participants", "echo"))).data() as Participant)
+      .startPosition === joined.positionOrder.length,
+  );
+  await rejects(
+    () => joinRace(raceId, "Echo", "smoke-uid-other", { source: "manual" }),
+    "a duplicate name is refused",
+  );
+  await rejects(
+    () => joinRace(raceId, "   ", null, { source: "manual" }),
+    "an empty name is refused",
+  );
+  await rejects(
+    () => joinRace(raceId, "!!!", null, { source: "manual" }),
+    "a name that slugs to nothing is refused",
+  );
+
+  // Removed again so the finishing order below is still the three-car race the
+  // scoring assertions were written for.
+  await setPositionOrder(raceId, joined.positionOrder.filter((id) => id !== "echo"), { source: "manual" });
+  await deleteDoc(doc(db, "races", raceId, "participants", "echo"));
 
   console.log("\nclaiming a racer:");
   const claimOf = async (id: string) =>

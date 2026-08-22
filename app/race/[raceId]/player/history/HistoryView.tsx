@@ -121,6 +121,7 @@ function subjectOf(event: RaceEvent): PlayerId | null {
     case "lapCompleted":
     case "dnfChanged":
     case "playerRemoved":
+    case "playerJoined":
     case "participantNoteSet":
     case "racerClaimed":
     case "racerReleased":
@@ -162,6 +163,8 @@ function describe(event: RaceEvent, nameOf: (id: PlayerId) => string): string {
       return `Settings changed: ${describePatch(event.patch)}.`;
     case "playerRemoved":
       return `${nameOf(event.playerId)} was taken off the grid.`;
+    case "playerJoined":
+      return `${event.name} joined the race, at the back.`;
     case "turnAdvanced":
       return `${nameOf(event.toPlayerId)} is up (round ${event.round}).`;
     case "roundStarted":

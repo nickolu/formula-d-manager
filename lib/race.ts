@@ -10,6 +10,7 @@ import {
   type Transaction,
 } from "firebase/firestore";
 import { db } from "./firebase";
+import { playerId as slugFor } from "./setup";
 import type {
   EventSource,
   LiveState,
@@ -190,6 +191,69 @@ export async function updateRaceSettings(
 
     appendEvent(tx, raceId, who, { type: "raceSettingsChanged", patch: applied });
   });
+}
+
+/**
+ * Adds someone to a race that already exists — the cold-start path for a player
+ * who isn't on the grid yet, and the only path when the grid is empty.
+ *
+ * **Does not touch roundOrder.** A joiner enters `positionOrder` only and
+ * starts taking turns next round, when the rollover snapshots it. This is the
+ * same rule as an overtake: mid-round changes to standings affect the next
+ * round, never the one in progress. Splicing a car into a round already
+ * underway would break the turnIndex/alreadyMoved arithmetic in the views and
+ * hand the joiner a turn out of nowhere.
+ *
+ * Item 6 locks roster *editing* once a race starts but deliberately leaves
+ * adding open — a late arrival is normal. Only removal locks.
+ */
+export async function joinRace(
+  raceId: string,
+  name: string,
+  uid: string | null,
+  who: Actor,
+): Promise<PlayerId> {
+  const trimmed = name.trim();
+  // Ids are name slugs so the same human is stable across races — which also
+  // means a name of only punctuation slugs to nothing and cannot be an id.
+  const id = slugFor(trimmed);
+  if (!trimmed || !id) throw new Error("Enter a name");
+
+  await runTransaction(db, async (tx) => {
+    const race = await readRace(tx, raceId);
+    const live = await readLive(tx, raceId);
+    if (race.status === "complete") throw new Error("This race is over");
+    if (live.positionOrder.includes(id)) {
+      throw new Error(`${trimmed} is already racing — claim them from the list`);
+    }
+
+    // merge so a returning player's record isn't clobbered, matching createRace.
+    tx.set(
+      doc(db, "players", id),
+      { name: trimmed, displayName: trimmed, active: true },
+      { merge: true },
+    );
+    tx.set(participantDoc(raceId, id), {
+      playerId: id,
+      startPosition: live.positionOrder.length + 1,
+      lapsCompleted: 0,
+      finalPosition: null,
+      dnf: false,
+      claimedBy: uid ?? null,
+    });
+    tx.update(liveDoc(raceId), {
+      positionOrder: [...live.positionOrder, id],
+      updatedAt: serverTimestamp(),
+    });
+
+    appendEvent(tx, raceId, who, {
+      type: "playerJoined",
+      playerId: id,
+      name: trimmed,
+    });
+  });
+
+  return id;
 }
 
 /**

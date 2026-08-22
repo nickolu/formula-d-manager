@@ -308,6 +308,16 @@ export interface PlayerRemovedEvent extends BaseEvent {
   playerId: PlayerId;
 }
 
+/**
+ * Someone added themselves to the race. Joining mid-race enters positionOrder
+ * only — the joiner starts taking turns next round.
+ */
+export interface PlayerJoinedEvent extends BaseEvent {
+  type: "playerJoined";
+  playerId: PlayerId;
+  name: string;
+}
+
 /** A device claimed a racer as its own. */
 export interface RacerClaimedEvent extends BaseEvent {
   type: "racerClaimed";
@@ -367,6 +377,7 @@ export type RaceEvent =
   | RaceStartedEvent
   | RaceSettingsChangedEvent
   | PlayerRemovedEvent
+  | PlayerJoinedEvent
   | TurnAdvancedEvent
   | RoundStartedEvent
   | RoundEndedEvent
