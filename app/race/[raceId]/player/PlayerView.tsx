@@ -1,7 +1,13 @@
 "use client";
 
 import { useState, useSyncExternalStore } from "react";
-import { useLiveState, useNow, useParticipants, usePlayers } from "@/lib/hooks";
+import {
+  useLiveState,
+  useNow,
+  useParticipants,
+  usePlayers,
+  useRace,
+} from "@/lib/hooks";
 import {
   advanceTurn,
   completeLap,
@@ -10,6 +16,7 @@ import {
   rewindTurn,
   setDnf,
   setPositionOrder,
+  startRace,
 } from "@/lib/race";
 import { formatRemaining, readTimer } from "@/lib/timer";
 import ReorderableList from "@/app/ReorderableList";
@@ -47,6 +54,7 @@ function writeMode(next: StandingsMode) {
 
 export default function PlayerView({ raceId }: { raceId: string }) {
   const { live, loading, error } = useLiveState(raceId);
+  const { race } = useRace(raceId);
   const players = usePlayers();
   const participants = useParticipants(raceId);
   const now = useNow();
@@ -73,6 +81,51 @@ export default function PlayerView({ raceId }: { raceId: string }) {
   if (error) return <p className="p-8 text-red-500">{error.message}</p>;
   if (!live) return <p className="p-8 text-neutral-400">No live race here yet.</p>;
   if (!live.positionOrder || !live.roundOrder) return <StaleRace />;
+
+  // A scheduled race has a grid and a stopped clock but no turn order yet.
+  // Everything below assumes a race in progress, so this is its own screen
+  // rather than a pile of conditionals threaded through one.
+  if (race?.status === "scheduled") {
+    return (
+      <main className="flex flex-col gap-6 p-4">
+        <div className="text-center">
+          <p className="text-xs uppercase tracking-widest text-neutral-500">
+            Starting grid
+          </p>
+          <p className="mt-1 text-2xl font-semibold">{race.track}</p>
+        </div>
+
+        <ol className="flex flex-col gap-1">
+          {live.positionOrder.map((id, i) => (
+            <li
+              key={id}
+              className="flex items-center gap-3 rounded border border-neutral-800 p-3"
+            >
+              <span className="w-5 text-neutral-500">{i + 1}</span>
+              <span>{nameOf(id)}</span>
+            </li>
+          ))}
+        </ol>
+
+        <button
+          onClick={() => run(() => startRace(raceId, { source: "manual" }))}
+          disabled={busy}
+          className="rounded-3xl bg-emerald-600 py-10 text-4xl font-bold active:bg-emerald-700 disabled:opacity-50"
+        >
+          Start race
+          <span className="mt-2 block text-base font-normal opacity-80">
+            drops the flag and starts the clock
+          </span>
+        </button>
+
+        <p className="text-center text-sm text-neutral-500">
+          The grid is still editable on the Settings tab.
+        </p>
+
+        {actionError && <p className="text-center text-red-500">{actionError}</p>}
+      </main>
+    );
+  }
 
   // Absent on races created before retirement was modelled.
   const retired = new Set(live.retired ?? []);

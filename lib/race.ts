@@ -7,7 +7,14 @@ import {
   type Transaction,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import type { EventSource, LiveState, Participant, PlayerId } from "./types";
+import type {
+  EventSource,
+  LiveState,
+  Participant,
+  PlayerId,
+  Race,
+  RaceSettings,
+} from "./types";
 
 export const raceDoc = (raceId: string) => doc(db, "races", raceId);
 export const liveDoc = (raceId: string) => doc(db, "races", raceId, "state", "live");
@@ -42,6 +49,179 @@ async function readLive(tx: Transaction, raceId: string): Promise<LiveState> {
   const snap = await tx.get(liveDoc(raceId));
   if (!snap.exists()) throw new Error(`No live state for race ${raceId}`);
   return snap.data() as LiveState;
+}
+
+async function readRace(tx: Transaction, raceId: string): Promise<Race> {
+  const snap = await tx.get(raceDoc(raceId));
+  if (!snap.exists()) throw new Error(`No race ${raceId}`);
+  return { id: raceId, ...snap.data() } as Race;
+}
+
+/**
+ * Drops the flag. A race is created `scheduled` with its clock stopped so the
+ * roster can be edited and latecomers can join; this is the explicit moment it
+ * becomes live.
+ *
+ * roundOrder is snapshotted from positionOrder here rather than at creation,
+ * which is what lets the grid be reordered right up to the start, and the
+ * participants' startPosition is rewritten to match — otherwise a grid edit
+ * would leave the recorded starting positions describing a race nobody ran.
+ *
+ * advanceTurn deliberately does NOT check the status. It is the hot path, once
+ * per turn per race, and adding a race-doc read to it would double its cost to
+ * guard against something the UI does not offer.
+ */
+export async function startRace(raceId: string, who: Actor) {
+  await runTransaction(db, async (tx) => {
+    const race = await readRace(tx, raceId);
+    const live = await readLive(tx, raceId);
+    if (race.status !== "scheduled") throw new Error("Race has already started");
+    if (live.positionOrder.length === 0) throw new Error("Nobody is on the grid");
+
+    tx.update(raceDoc(raceId), { status: "live" });
+    tx.update(liveDoc(raceId), {
+      currentPlayerId: live.positionOrder[0],
+      roundOrder: live.positionOrder,
+      currentRound: 1,
+      turnStartedAt: serverTimestamp(),
+      turnDurationMs: live.turnDurationDefaultMs ?? live.turnDurationMs,
+      updatedAt: serverTimestamp(),
+    });
+
+    live.positionOrder.forEach((playerId, i) => {
+      tx.update(participantDoc(raceId, playerId), { startPosition: i + 1 });
+    });
+
+    appendEvent(tx, raceId, who, {
+      type: "raceStarted",
+      order: live.positionOrder,
+    });
+  });
+}
+
+export interface RaceSettingsPatch {
+  track?: string;
+  lapCount?: number;
+  /** Written to turnDurationDefaultMs; takes effect on the next turn. */
+  turnSeconds?: number;
+  settings?: RaceSettings;
+}
+
+/**
+ * The one way race configuration changes. Writes the race doc and/or the live
+ * doc and appends a single raceSettingsChanged event carrying only what
+ * actually changed, so the log reads as a diff.
+ *
+ * Changing the turn length does NOT disturb a running turn: only
+ * turnDurationDefaultMs is written, and the new value takes effect next turn.
+ * Yanking the clock out from under whoever is mid-move is the kind of thing
+ * that starts an argument at the table. If the race is already paused there is
+ * nobody to disturb, so turnDurationMs is written too — which is what the
+ * operator expects when they change it during a break.
+ */
+export async function updateRaceSettings(
+  raceId: string,
+  patch: RaceSettingsPatch,
+  who: Actor,
+) {
+  await runTransaction(db, async (tx) => {
+    const live = await readLive(tx, raceId);
+
+    // Firestore rejects undefined, and an event carrying keys that did not
+    // change would make the log lie about what happened.
+    const applied: RaceSettingsPatch = {};
+    const raceFields: Record<string, unknown> = {};
+
+    if (patch.track !== undefined) {
+      const track = patch.track.trim();
+      if (!track) throw new Error("Track cannot be empty");
+      raceFields.track = track;
+      applied.track = track;
+    }
+    if (patch.lapCount !== undefined) {
+      if (!Number.isInteger(patch.lapCount) || patch.lapCount < 1) {
+        throw new Error("Laps must be a whole number, at least 1");
+      }
+      raceFields.lapCount = patch.lapCount;
+      applied.lapCount = patch.lapCount;
+    }
+    if (patch.settings !== undefined) {
+      // Dot paths rather than a nested object: writing `settings` whole would
+      // silently clear whichever toggle this caller didn't mention.
+      for (const [key, value] of Object.entries(patch.settings)) {
+        if (value !== undefined) raceFields[`settings.${key}`] = value;
+      }
+      applied.settings = patch.settings;
+    }
+
+    if (Object.keys(raceFields).length > 0) {
+      tx.update(raceDoc(raceId), raceFields);
+    }
+
+    if (patch.turnSeconds !== undefined) {
+      if (!Number.isFinite(patch.turnSeconds) || patch.turnSeconds < 1) {
+        throw new Error("Turn seconds must be at least 1");
+      }
+      const ms = Math.round(patch.turnSeconds * 1000);
+      tx.update(liveDoc(raceId), {
+        turnDurationDefaultMs: ms,
+        ...(live.turnStartedAt ? {} : { turnDurationMs: ms }),
+        updatedAt: serverTimestamp(),
+      });
+      applied.turnSeconds = patch.turnSeconds;
+    }
+
+    if (Object.keys(applied).length === 0) return;
+
+    appendEvent(tx, raceId, who, { type: "raceSettingsChanged", patch: applied });
+  });
+}
+
+/**
+ * Takes a car off the grid. Only while the race is `scheduled`.
+ *
+ * Removal is not deletion of history — the events stay — but it does have to
+ * unpick the player from every ordered list in one transaction. That fiddliness
+ * is exactly why it is locked after the start rather than merely discouraged:
+ * mid-race it would also have to re-anchor the current turn and reconcile a
+ * round already in progress.
+ */
+export async function removePlayer(
+  raceId: string,
+  playerId: PlayerId,
+  who: Actor,
+) {
+  await runTransaction(db, async (tx) => {
+    const race = await readRace(tx, raceId);
+    const live = await readLive(tx, raceId);
+    if (race.status !== "scheduled") {
+      throw new Error("The roster is locked once the race has started");
+    }
+    if (!live.positionOrder.includes(playerId)) {
+      throw new Error(`${playerId} is not on this grid`);
+    }
+    if (live.positionOrder.length <= 1) {
+      throw new Error("A race needs at least one car");
+    }
+
+    const without = (ids: PlayerId[]) => ids.filter((id) => id !== playerId);
+    const positionOrder = without(live.positionOrder);
+
+    tx.delete(participantDoc(raceId, playerId));
+    tx.update(liveDoc(raceId), {
+      positionOrder,
+      roundOrder: without(live.roundOrder),
+      retired: without(live.retired ?? []),
+      previousRoundOrder: live.previousRoundOrder
+        ? without(live.previousRoundOrder)
+        : null,
+      // The grid's first car is up first, and only startRace anchors the clock.
+      currentPlayerId: positionOrder[0],
+      updatedAt: serverTimestamp(),
+    });
+
+    appendEvent(tx, raceId, who, { type: "playerRemoved", playerId });
+  });
 }
 
 /**

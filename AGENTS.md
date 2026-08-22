@@ -183,6 +183,29 @@ it already exists so it can never clobber a scoring table tuned in the console.
   deliberately **does not auto-redirect when exactly one race is live**: it
   would save a tap at the cost of the root behaving differently week to week,
   and it would strand anyone trying to reach a finished race.
+- **`scheduled` is a real state.** A race is created `scheduled` with its clock
+  stopped, and `startRace` is the explicit moment the flag drops: it flips the
+  status to `live`, anchors the timer, snapshots `roundOrder` from
+  `positionOrder` and rewrites each participant's `startPosition`. Snapshotting
+  at the start rather than at creation is what lets the grid be reordered right
+  up to the flag without leaving the recorded start positions describing a race
+  nobody ran. The roster is editable only while `scheduled` — `removePlayer`
+  refuses afterwards, because mid-race it would have to unpick three ordered
+  lists *and* re-anchor a round already in progress. Retiring a car is the
+  in-race answer, and it is reversible.
+- **`advanceTurn` deliberately does not check the race status.** It is the hot
+  path — once per turn, per race — and adding a race-doc read would double its
+  cost to guard against something no screen offers.
+- **Race configuration goes through `updateRaceSettings`**, which writes the
+  race doc and/or the live doc and appends one `raceSettingsChanged` event
+  carrying **only the fields that changed**, so the log reads as a diff rather
+  than a snapshot. Changing the turn length writes `turnDurationDefaultMs`
+  only, taking effect on the next turn: yanking the clock out from under
+  whoever is mid-move starts arguments. If the race is already paused there is
+  nobody to disturb, so `turnDurationMs` is written too — which is what an
+  operator changing it during a break expects. Feature toggles live under
+  `races/{id}.settings` and are written by **dot path**, since writing the map
+  whole would silently clear a toggle the caller never mentioned.
 - **Player subviews are real routes, not conditional render.** A player lands
   cold on a phone with no navigation history, so every subview has to be
   reachable by URL and survive a reload. `app/race/[raceId]/player/layout.tsx`
@@ -235,7 +258,7 @@ it already exists so it can never clobber a scoring table tuned in the console.
 ## Verification
 
 ```bash
-npm run smoke         # 63 end-to-end checks against the real project
+npm run smoke         # 85 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 
@@ -276,6 +299,9 @@ nudging, per-car laps, manual correction.
   - **Done:** rewinding a turn now resets the clock and leaves it paused.
   - **Done:** the player view is a route with subviews and a bottom tab bar,
     and the first subview is history — the event log read back as sentences.
+  - **Done:** a race settings subview, and `scheduled` given real meaning —
+    races start unstarted, the grid is editable until Start race drops the
+    flag, and the roster locks after that.
   - **Next:** race history and player pages (both are views over the same
     `result` data), then post-game review to confirm the finishing order before
     a race is sealed.

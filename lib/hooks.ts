@@ -1,6 +1,6 @@
 "use client";
 
-import { collection, limit, onSnapshot, orderBy, query } from "firebase/firestore";
+import { collection, doc, limit, onSnapshot, orderBy, query } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import { db } from "./firebase";
 import { liveDoc } from "./race";
@@ -106,6 +106,27 @@ export function useRaceList() {
 
 export function useRaces() {
   return useRaceList().races;
+}
+
+/**
+ * One race document. Separate from the live doc on purpose: status, track,
+ * lapCount and the feature toggles change rarely, while the live doc changes
+ * every turn — two listeners means a settings read doesn't ride along with
+ * every tick of the game.
+ */
+export function useRace(raceId: string) {
+  const [race, setRace] = useState<Race | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, "races", raceId), (snap) => {
+      setRace(snap.exists() ? ({ id: snap.id, ...snap.data() } as Race) : null);
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, [raceId]);
+
+  return { race, loading };
 }
 
 /**

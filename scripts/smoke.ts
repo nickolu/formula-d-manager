@@ -27,11 +27,14 @@ import {
   finishRace,
   liveDoc,
   pauseTurn,
+  removePlayer,
   resumeTurn,
   rewindTurn,
   setDnf,
   setPositionOrder,
+  startRace,
   uncompleteLap,
+  updateRaceSettings,
 } from "../lib/race";
 import { computeStandings, pointsFor } from "../lib/scoring";
 import { DEFAULT_SCORING } from "../lib/seasons";
@@ -104,7 +107,9 @@ async function main() {
     track: "SMOKE-TEST",
     lapCount: 2,
     turnSeconds: TURN_SECONDS,
-    playerNames: ["Alpha", "Bravo", "Charlie"],
+    // Delta is removed below, before the flag drops — the rest of the run is a
+    // three-car race, exactly as it was before the roster was editable.
+    playerNames: ["Alpha", "Bravo", "Charlie", "Delta"],
   });
   console.log(`created race ${raceId}\n`);
 
@@ -113,13 +118,71 @@ async function main() {
     if (snap.exists()) states.push(snap.data() as LiveState);
   });
 
+  let mark0 = 0;
   const initial = await waitFor(states, (s) => !!s.currentPlayerId, "initial state");
   check("listener receives initial state", true);
-  check("grid seeds both lists", initial.positionOrder.join(",") === "alpha,bravo,charlie" && initial.roundOrder.join(",") === "alpha,bravo,charlie");
+  check("grid seeds both lists", initial.positionOrder.join(",") === "alpha,bravo,charlie,delta" && initial.roundOrder.join(",") === "alpha,bravo,charlie,delta");
   check("starts on round 1", initial.currentRound === 1, `round ${initial.currentRound}`);
-  check("leader plays first", initial.currentPlayerId === "alpha");
+  check("pole sitter is up", initial.currentPlayerId === "alpha");
   check("timer derives ~90s", readTimer(initial, Date.now()).remainingMs > 85_000);
   check("the configured turn length is seeded", initial.turnDurationDefaultMs === TURN_MS, `${initial.turnDurationDefaultMs}`);
+
+  const created = (await getDoc(doc(db, "races", raceId))).data() as Race;
+  check("a new race is scheduled, not live", created.status === "scheduled", created.status);
+  check("an unstarted race has a stopped clock", readTimer(initial, Date.now()).isPaused);
+
+  console.log("\nsettings, before the flag drops:");
+  mark0 = states.length;
+  await updateRaceSettings(raceId, { track: "SMOKE-TEST 2", lapCount: 3, turnSeconds: 45 }, { source: "manual" });
+  const configured = await waitFor(states, (s) => s.turnDurationDefaultMs === 45_000, "settings applied", 10_000, mark0);
+  const reconfigured = (await getDoc(doc(db, "races", raceId))).data() as Race;
+  check("track and laps persist on the race doc", reconfigured.track === "SMOKE-TEST 2" && reconfigured.lapCount === 3, `${reconfigured.track}/${reconfigured.lapCount}`);
+  check("a paused race also takes the new clock immediately", configured.turnDurationMs === 45_000, `${configured.turnDurationMs}`);
+  await rejects(
+    () => updateRaceSettings(raceId, { lapCount: 0 }, { source: "manual" }),
+    "a nonsense lap count is refused",
+  );
+  await rejects(
+    () => updateRaceSettings(raceId, { track: "   " }, { source: "manual" }),
+    "an empty track name is refused",
+  );
+
+  mark0 = states.length;
+  await updateRaceSettings(raceId, { track: "SMOKE-TEST", lapCount: 2, turnSeconds: TURN_SECONDS, settings: { betweenRounds: true } }, { source: "manual" });
+  await waitFor(states, (s) => s.turnDurationDefaultMs === TURN_MS, "settings restored", 10_000, mark0);
+  const toggled = (await getDoc(doc(db, "races", raceId))).data() as Race;
+  check("feature toggles land under settings", toggled.settings?.betweenRounds === true, JSON.stringify(toggled.settings));
+
+  console.log("\nediting the grid while scheduled:");
+  mark0 = states.length;
+  await removePlayer(raceId, "delta", { source: "manual" });
+  const trimmed = await waitFor(states, (s) => !s.positionOrder.includes("delta"), "delta removed", 10_000, mark0);
+  check("removal unpicks every ordered list", trimmed.positionOrder.join(",") === "alpha,bravo,charlie" && trimmed.roundOrder.join(",") === "alpha,bravo,charlie", trimmed.roundOrder.join(","));
+  check(
+    "the participant doc goes with it",
+    !(await getDoc(doc(db, "races", raceId, "participants", "delta"))).exists(),
+  );
+
+  console.log("\ndropping the flag:");
+  mark0 = states.length;
+  await startRace(raceId, { source: "manual" });
+  const started = await waitFor(states, (s) => s.turnStartedAt !== null, "race started", 10_000, mark0);
+  check("the race goes live", ((await getDoc(doc(db, "races", raceId))).data() as Race).status === "live");
+  check("starting anchors the clock", !readTimer(started, Date.now()).isPaused);
+  check("the round order is snapshotted at the start", started.roundOrder.join(",") === "alpha,bravo,charlie", started.roundOrder.join(","));
+  check("leader plays first", started.currentPlayerId === "alpha");
+  check(
+    "start positions follow the grid as it finally stood",
+    (await getDoc(doc(db, "races", raceId, "participants", "charlie"))).data()?.startPosition === 3,
+  );
+  await rejects(
+    () => startRace(raceId, { source: "manual" }),
+    "starting a race twice is refused",
+  );
+  await rejects(
+    () => removePlayer(raceId, "charlie", { source: "manual" }),
+    "the roster is locked once the race has started",
+  );
 
   console.log("\nturns within a round:");
   await advanceTurn(raceId, { source: "manual" });
@@ -172,6 +235,20 @@ async function main() {
   const resumed = await waitFor(states, (s) => s.turnStartedAt !== null, "resumed");
   check("resume re-anchors the clock", !readTimer(resumed, Date.now()).isPaused);
 
+  console.log("\nchanging the turn length mid-turn:");
+  const before = states[states.length - 1];
+  mark0 = states.length;
+  await updateRaceSettings(raceId, { turnSeconds: 30 }, { source: "manual" });
+  const midTurn = await waitFor(states, (s) => s.turnDurationDefaultMs === 30_000, "new default", 10_000, mark0);
+  check(
+    "a running turn keeps its clock",
+    midTurn.turnDurationMs === before.turnDurationMs,
+    `${midTurn.turnDurationMs} vs ${before.turnDurationMs}`,
+  );
+  mark0 = states.length;
+  await updateRaceSettings(raceId, { turnSeconds: TURN_SECONDS }, { source: "manual" });
+  await waitFor(states, (s) => s.turnDurationDefaultMs === TURN_MS, "default restored", 10_000, mark0);
+
   console.log("\nevent log:");
   const events = await getDocs(collection(db, "races", raceId, "events"));
   const types = events.docs.map((d) => d.data().type as string);
@@ -181,6 +258,14 @@ async function main() {
   check("lapCompleted logged 3x", types.filter((t) => t === "lapCompleted").length === 3);
   check("turnAdvanced logged 3x", types.filter((t) => t === "turnAdvanced").length === 3, `${types.filter((t) => t === "turnAdvanced").length}`);
   check("all events carry a source", events.docs.every((d) => !!d.data().source));
+  check("the flag drop is logged", types.includes("raceStarted"));
+  check("the removal is logged", types.includes("playerRemoved"));
+  check(
+    "a settings change logs only what changed",
+    events.docs
+      .filter((d) => d.data().type === "raceSettingsChanged")
+      .some((d) => Object.keys(d.data().patch).join(",") === "turnSeconds"),
+  );
 
   // State here: round 2, roundOrder charlie,alpha,bravo, charlie to play.
   console.log("\nstepping back through the turn order:");

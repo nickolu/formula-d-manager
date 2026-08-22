@@ -8,11 +8,12 @@ import { usePathname } from "next/navigation";
  * and it survives the page scrolling.
  *
  * Only subviews that exist get a tab. A tab leading to a 404 is worse than no
- * tab, so "My racer" and "Settings" arrive with the items that build them.
+ * tab, so "My racer" arrives with the item that builds it.
  */
 const TABS = [
   { segment: "", label: "Turn order" },
   { segment: "history", label: "History" },
+  { segment: "settings", label: "Settings" },
 ];
 
 export default function PlayerTabs({ raceId }: { raceId: string }) {

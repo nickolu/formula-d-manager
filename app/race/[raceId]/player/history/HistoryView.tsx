@@ -4,7 +4,7 @@ import { assignCars, readableInk } from "@/lib/cars";
 import { useLiveState, usePlayers, useRaceEvents } from "@/lib/hooks";
 import { formatRemaining } from "@/lib/timer";
 import type { Car } from "@/lib/cars";
-import type { PlayerId, RaceEvent } from "@/lib/types";
+import type { PlayerId, RaceEvent, RaceSettingsChangedEvent } from "@/lib/types";
 
 /**
  * The race event log, rendered as sentences, newest first.
@@ -120,10 +120,23 @@ function subjectOf(event: RaceEvent): PlayerId | null {
       return event.toPlayerId;
     case "lapCompleted":
     case "dnfChanged":
+    case "playerRemoved":
       return event.playerId;
     default:
       return null;
   }
+}
+
+/** A settings event carries only what changed, so read it back the same way. */
+function describePatch(patch: RaceSettingsChangedEvent["patch"]): string {
+  const parts: string[] = [];
+  if (patch.track !== undefined) parts.push(`track is now ${patch.track}`);
+  if (patch.lapCount !== undefined) parts.push(`${patch.lapCount} laps`);
+  if (patch.turnSeconds !== undefined) parts.push(`${patch.turnSeconds}s turns`);
+  for (const [key, value] of Object.entries(patch.settings ?? {})) {
+    parts.push(`${key} ${value ? "on" : "off"}`);
+  }
+  return parts.join(", ");
 }
 
 /**
@@ -139,7 +152,13 @@ function describe(event: RaceEvent, nameOf: (id: PlayerId) => string): string {
 
   switch (event.type) {
     case "raceCreated":
-      return `Race started at ${event.track} — ${event.lapCount} laps, grid: ${list(event.order)}.`;
+      return `Race created at ${event.track} — ${event.lapCount} laps, grid: ${list(event.order)}.`;
+    case "raceStarted":
+      return `The flag drops — grid: ${list(event.order)}.`;
+    case "raceSettingsChanged":
+      return `Settings changed: ${describePatch(event.patch)}.`;
+    case "playerRemoved":
+      return `${nameOf(event.playerId)} was taken off the grid.`;
     case "turnAdvanced":
       return `${nameOf(event.toPlayerId)} is up (round ${event.round}).`;
     case "roundStarted":

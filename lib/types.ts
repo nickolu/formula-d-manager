@@ -28,7 +28,24 @@ export interface Season {
   startDate: Timestamp;
 }
 
+/**
+ * `scheduled` is a real state, not a placeholder: createRace leaves the race
+ * unstarted with its clock stopped, and an explicit startRace drops the flag.
+ * That window is when the roster can be edited — and it is what makes joining
+ * a race before it begins coherent.
+ */
 export type RaceStatus = "scheduled" | "live" | "complete";
+
+/**
+ * Per-race feature toggles. Optional, and absent means off, so races created
+ * before a toggle existed keep working untouched.
+ */
+export interface RaceSettings {
+  /** Stop on nobody's turn between rounds so the table can confirm order. */
+  betweenRounds?: boolean;
+  /** Show the per-car status counter. */
+  carStatus?: boolean;
+}
 
 /**
  * The finishing order, denormalized onto the race document by finishRace in the
@@ -53,6 +70,8 @@ export interface Race {
   status: RaceStatus;
   /** Laps required to finish. Each lap spans many rounds. */
   lapCount: number;
+  /** Absent on races created before toggles existed; absent means off. */
+  settings?: RaceSettings;
   /** Present only once the race is complete. Absent on live/scheduled races. */
   result?: RaceResult;
 }
@@ -200,6 +219,38 @@ export interface DnfChangedEvent extends BaseEvent {
   dnf: boolean;
 }
 
+/** The flag drops: the race leaves `scheduled` and the clock is anchored. */
+export interface RaceStartedEvent extends BaseEvent {
+  type: "raceStarted";
+  /** The grid as it stood at the start, after any roster edits. */
+  order: PlayerId[];
+}
+
+/**
+ * A change to how the race is configured. Carries only the fields that
+ * actually changed, so the log reads as a diff rather than a snapshot.
+ */
+export interface RaceSettingsChangedEvent extends BaseEvent {
+  type: "raceSettingsChanged";
+  patch: {
+    track?: string;
+    lapCount?: number;
+    turnSeconds?: number;
+    settings?: RaceSettings;
+  };
+}
+
+/**
+ * A car taken off the grid before the start. Only possible while `scheduled` —
+ * unpicking a player from a race in progress means rewriting three ordered
+ * lists and possibly the current turn, which is why it is locked rather than
+ * merely discouraged.
+ */
+export interface PlayerRemovedEvent extends BaseEvent {
+  type: "playerRemoved";
+  playerId: PlayerId;
+}
+
 /** A mis-tapped turn, stepped back. Appended like any other mutation. */
 export interface TurnRewoundEvent extends BaseEvent {
   type: "turnRewound";
@@ -235,6 +286,9 @@ export interface CorrectionEvent extends BaseEvent {
 
 export type RaceEvent =
   | RaceCreatedEvent
+  | RaceStartedEvent
+  | RaceSettingsChangedEvent
+  | PlayerRemovedEvent
   | TurnAdvancedEvent
   | RoundStartedEvent
   | PositionOrderChangedEvent

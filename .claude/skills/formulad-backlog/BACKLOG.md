@@ -17,7 +17,7 @@ fields exist.
 | 3 | 12 | Player landing + `/admin` split | **done** | 2 |
 | 4 | 3 | Player view IA + history subview | **done** | 2 |
 | 5 | 4 | Go back a turn (reset + auto-pause) | **done** | — |
-| 6 | 6 | Race settings view | todo | 3, 4 |
+| 6 | 6 | Race settings view | **done** | 3, 4 |
 | 7 | 7 | Between-rounds pause step | todo | 6 |
 | 8 | 9 | Delete a race | todo | 6 |
 | 9 | 8 | Notes in results | todo | 5 |
@@ -64,6 +64,7 @@ the answer in the spec file and in `AGENTS.md`.
   with (Phase 2 adds real accounts). Item 9 puts race deletion behind it.
   Interim answer in item 6: keep it reachable but visually separated, and gate
   destructive actions behind confirmation.
-- **"If the game has already started"** (item 6, locking player edits) has no
-  clean signal today — `createRace` writes `status: "live"` immediately, so
-  `scheduled` never occurs in practice. Item 6 proposes a definition; confirm it.
+- ~~**"If the game has already started"**~~ **Resolved in item 6, confirmed by
+  the user:** `scheduled` was given its real meaning. `createRace` writes
+  `status: "scheduled"` with the clock stopped, and an explicit `startRace`
+  flips it to `live`. The roster is editable only while scheduled.

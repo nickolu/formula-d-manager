@@ -39,7 +39,9 @@ Older bookmarks still work: `/table` and `/device` redirect to `/player`,
 only URL anyone needs. The commissioner's tools live at `/admin`.
 
 Create a race from `/admin`, enter players in starting grid order, then open the
-player and screen views on separate devices.
+player and screen views on separate devices. A new race starts **scheduled**
+with its clock stopped — edit the grid and the settings, then tap **Start race**
+on the player view to drop the flag. The roster locks once it is running.
 
 During play:
 
@@ -59,7 +61,7 @@ at zero, and nothing happens mechanically — it's social pressure only.
 ```bash
 npm run dev     # dev server
 npm run build   # production build
-npm run smoke   # 63 end-to-end checks against the real Firestore project
+npm run smoke   # 85 end-to-end checks against the real Firestore project
 npm run lint
 ```
 

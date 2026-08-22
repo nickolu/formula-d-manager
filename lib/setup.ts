@@ -40,13 +40,18 @@ export async function createRace(input: NewRaceInput): Promise<string> {
     seasonId: input.seasonId ?? "default",
     track: input.track,
     scheduledAt: serverTimestamp(),
-    status: "live",
+    // Scheduled, not live: the roster stays editable and the clock stays
+    // stopped until someone explicitly taps Start race.
+    status: "scheduled",
     lapCount: input.lapCount,
   });
 
   batch.set(doc(db, "races", raceRef.id, "state", "live"), {
     currentPlayerId: ids[0] ?? null,
-    turnStartedAt: serverTimestamp(),
+    // Null is the paused state everywhere else too, so an unstarted race needs
+    // no special case in readTimer or any view: the pole sitter is shown with
+    // a full clock that isn't running.
+    turnStartedAt: null,
     turnDurationMs: input.turnSeconds * 1000,
     turnDurationDefaultMs: input.turnSeconds * 1000,
     currentRound: 1,
