@@ -255,18 +255,23 @@ it already exists so it can never clobber a scoring table tuned in the console.
   `carStatusSpecFor` is the one place that resolves it, used by both the view
   and the mutation. This is the "every reader handles the field's absence" rule
   doing its job: an old race gets the standard card, not a broken one.
-- **The car card renders a change before the write lands.** Firestore's latency
-  compensation covers plain writes but **not transactions**, and every mutation
-  here is a transaction — so the local cache has nothing to show until the
-  server answers, and a peg tap sat visibly waiting. `CarStatusCard` holds the
-  tapped value locally and shows it at once, releasing it when the *last*
-  outstanding write for that key settles (not the first — rapid taps overlap,
-  and clearing early would snap a peg back to a stale value while a later write
-  is still in flight). Once nothing is outstanding the streamed value is
-  authoritative again, so a failed write needs no rollback: dropping the held
-  value already reverts it. Card edits also go through `runQuiet`, which does
-  not raise the busy flag — dimming the card on every tap was most of what made
-  it feel slow.
+- **The car card renders a change before the write lands, and the release rule
+  is the whole trick.** Firestore's latency compensation covers plain writes but
+  **not transactions**, and every mutation here is a transaction — so the local
+  cache has nothing to show until the server answers, and a peg tap sat visibly
+  waiting. `CarStatusCard` holds the tapped value and shows it at once. The part
+  that is easy to get wrong is when to stop: releasing on the write's promise is
+  a flicker, because a transaction resolves when the server commits, which is
+  *before* the snapshot carrying that commit arrives — for one frame the row
+  falls back to the pre-tap value. So a held value is released only when keeping
+  it would be wrong: the write failed (dropping it *is* the undo, since the
+  streamed value is already the truth), or the store settled on something that is
+  neither our value nor what was there when our write landed, meaning someone
+  else moved it. When the store merely catches up with what is already on screen,
+  nothing happens at all — a successful tap renders exactly once. This is why the
+  injected write must **rethrow**: `runReported` surfaces the error and rethrows,
+  and the undo hangs off that rejection. Card edits also skip the busy flag;
+  dimming the card on every tap was most of what made it feel slow.
 - **The reverse gear is deliberately not beside Next turn.** "Back a turn" is a
   small, muted link at the *top* of the player view, not a button in the row
   with the primary action. Next turn is tapped a few hundred times a night and

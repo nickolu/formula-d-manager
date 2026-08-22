@@ -44,14 +44,19 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
 
   /**
    * For changes that render themselves optimistically: no busy flag, so
-   * nothing on screen dims while the write is in flight. Errors still surface.
+   * nothing on screen dims while the write is in flight.
+   *
+   * Reports the failure and then **rethrows**, which matters — the card undoes
+   * its optimistic change by catching this. Swallowing it here would leave the
+   * card showing a value that was never written.
    */
-  async function runQuiet(action: () => Promise<void>) {
+  async function runReported(action: () => Promise<void>) {
     setError(null);
     try {
       await action();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      throw e;
     }
   }
 
@@ -100,15 +105,17 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
       // Anyone can change anyone's card, the same way anyone can reach across
       // the table. The claim decides whose shows up top, nothing more.
       //
-      // runQuiet, not run: a card edit must not raise the busy flag. The card
-      // renders the change immediately and reverts itself if the write fails,
-      // so dimming the screen around it would only make a peg tap feel slow.
+      // runReported, not run: a card edit must not raise the busy flag. The
+      // card renders the change immediately and reverts itself if the write
+      // fails, so dimming the screen around it would only make a tap feel slow.
       onSetCarStatus={(key, value) =>
-        runQuiet(() => setCarStatus(raceId, id, key, value, { source: "manual" }))
+        runReported(() =>
+          setCarStatus(raceId, id, key, value, { source: "manual" }),
+        )
       }
       gears={gears}
       onSetGear={(gear) =>
-        runQuiet(() => setGear(raceId, id, gear, { source: "manual" }))
+        runReported(() => setGear(raceId, id, gear, { source: "manual" }))
       }
     />
   );

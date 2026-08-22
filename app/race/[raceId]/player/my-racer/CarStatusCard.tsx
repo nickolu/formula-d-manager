@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { startOf } from "@/lib/setup";
 import type { CarStatusProperty, GearRange } from "@/lib/types";
 
@@ -41,17 +41,29 @@ export default function CarStatusCard({
   onSetGear: (gear: number | null) => Promise<void>;
   disabled?: boolean;
 }) {
-  const status = useOptimistic<string, number>(onSet);
-  const lever = useOptimistic<"gear", number | null>((_, value) =>
-    onSetGear(value),
+  // The truth as streamed, gear included, so one optimistic layer covers both.
+  // Absent means the property's starting value: a car nobody has touched is
+  // undamaged, and undamaged is not the same as full once upgrades let it hold
+  // more than it starts with.
+  const actual = useMemo(() => {
+    const map = new Map<string, number | null>();
+    for (const property of spec) {
+      map.set(property.key, values?.[property.key] ?? startOf(property));
+    }
+    map.set(GEAR, gear);
+    return map;
+  }, [spec, values, gear]);
+
+  const card = useOptimistic<string, number | null>(actual, (key, value) =>
+    key === GEAR ? onSetGear(value) : onSet(key, value as number),
   );
 
   return (
     <div className="flex flex-col gap-4">
       <GearSelector
         gears={gears}
-        gear={lever.shown("gear", gear)}
-        onSetGear={(next) => lever.set("gear", next)}
+        gear={card.shown(GEAR, gear)}
+        onSetGear={(next) => card.set(GEAR, next)}
         disabled={disabled}
       />
 
@@ -59,14 +71,10 @@ export default function CarStatusCard({
         <PropertyRow
           key={property.key}
           property={property}
-          // Absent means the property's starting value: a car nobody has
-          // touched is undamaged, and undamaged is not the same as full once
-          // upgrades let it hold more than it starts with.
-          remaining={status.shown(
-            property.key,
-            values?.[property.key] ?? startOf(property),
-          )}
-          onSet={(value) => status.set(property.key, value)}
+          remaining={
+            card.shown(property.key, actual.get(property.key) ?? 0) as number
+          }
+          onSet={(value) => card.set(property.key, value)}
           disabled={disabled}
         />
       ))}
@@ -74,38 +82,83 @@ export default function CarStatusCard({
   );
 }
 
+/** Reserved key: the lever rides the same optimistic layer as the properties. */
+const GEAR = "\u0000gear";
+
 /**
- * Shows what was just tapped, until the write settles.
+ * Shows what was just tapped, and gets out of the way without a flicker.
  *
- * The held value is dropped when the LAST write for that key settles, not the
- * first: rapid taps overlap, and clearing on the first to come back would snap
- * the peg to a stale value while a later write is still in flight. Once nothing
- * is outstanding the streamed value is authoritative again, so an error needs
- * no rollback — dropping the held value already reverts it.
+ * The subtlety is when to STOP showing the held value. Releasing it when the
+ * write resolves is wrong and was the original flicker: a transaction's promise
+ * settles when the server commits, which is *before* the snapshot carrying that
+ * commit arrives, so for one frame the row fell back to the pre-tap value.
+ *
+ * So a held value is released only when keeping it would be wrong:
+ *
+ *   - the write failed        — drop it, which is the whole undo; the streamed
+ *                               value is already the truth. This is why the
+ *                               injected `write` must rethrow rather than
+ *                               swallow: the undo hangs off that rejection.
+ *   - someone else moved it   — the store settled on something that is neither
+ *                               our value nor what was there when our write
+ *                               landed, so theirs wins
+ *
+ * When the store simply catches up with what we are already showing, nothing
+ * happens at all: the held value and the streamed one agree, so dropping it
+ * would only cost a render that changes nothing. A successful tap therefore
+ * renders exactly once.
  */
 function useOptimistic<K extends string, V>(
+  actual: Map<K, V>,
   write: (key: K, value: V) => Promise<void>,
 ) {
   const [held, setHeld] = useState<Map<K, V>>(new Map());
   const outstanding = useRef(new Map<K, number>());
+  // What the store held at the moment our last write for this key finished.
+  // A later move away from it can only be someone else's.
+  const settledAgainst = useRef(new Map<K, V>());
+
+  const drop = (key: K) => {
+    settledAgainst.current.delete(key);
+    setHeld((h) => {
+      if (!h.has(key)) return h;
+      const next = new Map(h);
+      next.delete(key);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    for (const [key, value] of held) {
+      if ((outstanding.current.get(key) ?? 0) > 0) continue;
+      const now = actual.get(key) as V;
+      if (now === value) continue; // caught up — leave it be, nothing to re-render
+      if (
+        settledAgainst.current.has(key) &&
+        now !== settledAgainst.current.get(key)
+      ) {
+        drop(key);
+      }
+    }
+    // `drop` is stable enough for this: it only closes over setHeld and refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actual, held]);
 
   return {
-    shown: (key: K, actual: V) => (held.has(key) ? (held.get(key) as V) : actual),
+    shown: (key: K, fallback: V) => (held.has(key) ? (held.get(key) as V) : fallback),
     set: async (key: K, value: V) => {
+      const before = actual.get(key) as V;
       setHeld((h) => new Map(h).set(key, value));
       outstanding.current.set(key, (outstanding.current.get(key) ?? 0) + 1);
       try {
         await write(key, value);
+        settledAgainst.current.set(key, before);
+      } catch {
+        // The undo. No rethrow: `write` has already reported the failure, and
+        // this promise is handed to a click handler that cannot await it.
+        drop(key);
       } finally {
-        const left = (outstanding.current.get(key) ?? 1) - 1;
-        outstanding.current.set(key, left);
-        if (left === 0) {
-          setHeld((h) => {
-            const next = new Map(h);
-            next.delete(key);
-            return next;
-          });
-        }
+        outstanding.current.set(key, (outstanding.current.get(key) ?? 1) - 1);
       }
     },
   };
