@@ -2,8 +2,14 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { useLiveState, usePlayers, useRace } from "@/lib/hooks";
 import {
+  useLiveState,
+  useParticipants,
+  usePlayers,
+  useRace,
+} from "@/lib/hooks";
+import {
+  clearRacerClaim,
   deleteRace,
   removePlayer,
   setPositionOrder,
@@ -29,6 +35,7 @@ export default function SettingsView({ raceId }: { raceId: string }) {
   const { race, loading } = useRace(raceId);
   const { live } = useLiveState(raceId);
   const players = usePlayers();
+  const participants = useParticipants(raceId);
   const router = useRouter();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
@@ -79,6 +86,9 @@ export default function SettingsView({ raceId }: { raceId: string }) {
   const deletable = race.status === "complete" || stale;
   const grid = live?.positionOrder ?? [];
   const nameOf = (id: PlayerId) => players.get(id)?.displayName ?? id;
+  // In grid order rather than sorted: it reads as the same list as the section
+  // above it, which is how the commissioner is already looking at this race.
+  const claimed = grid.filter((id) => participants.get(id)?.claimedBy);
 
   const trackValue = track ?? race.track;
   const locationValue = location ?? race.location ?? "";
@@ -300,6 +310,54 @@ export default function SettingsView({ raceId }: { raceId: string }) {
           </>
         )}
       </section>
+
+      {!stale && (
+        <section>
+          <h2 className="mb-2 text-xs uppercase tracking-widest text-neutral-500">
+            Claimed racers
+          </h2>
+
+          {/* The way out of a claim nobody can give back. "My racer" is derived
+              from participants/{id}.claimedBy, and a player releases their own
+              — which is no help at all when the phone that made the claim is
+              flat, gone home, or was a borrowed tablet. Freeing it here does
+              not pick a new owner: the next device to tap that racer gets it,
+              which is the same rule as every other claim. */}
+          <p className="mb-3 text-sm text-neutral-400">
+            Free a racer whose phone isn&rsquo;t here, so somebody else can pick
+            them. This race only — the claim that follows a player between game
+            nights lives on the season roster.
+          </p>
+
+          {claimed.length === 0 ? (
+            <p className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-400">
+              Nobody has picked a racer in this race.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {claimed.map((id) => (
+                <li
+                  key={id}
+                  className="flex items-center justify-between gap-3 rounded border border-neutral-800 p-3"
+                >
+                  <span className="min-w-0 truncate">{nameOf(id)}</span>
+                  <button
+                    onClick={() =>
+                      run(`${nameOf(id)} is free to pick again`, () =>
+                        clearRacerClaim(raceId, id, { source: "manual" }),
+                      )
+                    }
+                    disabled={busy}
+                    className="shrink-0 rounded border border-neutral-700 px-3 py-1 text-xs text-neutral-300 disabled:opacity-30"
+                  >
+                    Free racer
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
       <section>
         <h2 className="mb-2 text-xs uppercase tracking-widest text-red-900">

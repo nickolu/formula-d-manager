@@ -803,6 +803,42 @@ export async function releaseRacer(
 }
 
 /**
+ * The commissioner's override: frees a racer whoever is holding them.
+ *
+ * `releaseRacer` above is a device giving its own claim back, and it verifies
+ * the uid precisely so one phone cannot free another's. That leaves one case
+ * with no way out — the phone that made the claim is not here. It is flat, or
+ * it went home, or it was a borrowed tablet — and "my racer" is derived from
+ * the claim, so the player is locked out of their own car with nobody able to
+ * hand it back.
+ *
+ * So this is the same write **without the uid check**, on a commissioner screen
+ * (race settings) rather than a player one. It is not a permission — there is
+ * no auth to hang one on, the same honesty as /admin not being hidden — it is a
+ * separate function so that the player path keeps its check and a null uid can
+ * never quietly turn `releaseRacer` into a way to steal a claim.
+ *
+ * The event records the uid that *was* holding it, because that is the fact
+ * worth having in the log; a no-op on an unclaimed racer appends nothing.
+ */
+export async function clearRacerClaim(
+  raceId: string,
+  playerId: PlayerId,
+  who: Actor,
+) {
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(participantDoc(raceId, playerId));
+    if (!snap.exists()) throw new Error(`${playerId} is not in this race`);
+
+    const uid = (snap.data() as Participant).claimedBy ?? null;
+    if (!uid) return; // nobody holds it — nothing happened, so nothing is logged
+
+    tx.update(participantDoc(raceId, playerId), { claimedBy: null });
+    appendEvent(tx, raceId, who, { type: "racerReleased", playerId, uid });
+  });
+}
+
+/**
  * Records why a car's race went the way it did. Usually a retirement reason,
  * but any car can have one.
  *

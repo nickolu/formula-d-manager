@@ -692,6 +692,28 @@ it lists every race, which is what `/` wants.
   because **the web SDK cannot run a collection query inside a transaction** —
   that value is verified before being cleared, so a stale one can never free
   someone else's claim.
+- **A claim needs a way out that does not need the holder.** Because the uid is
+  a *device*, a racer picked on a phone is unpickable everywhere else — which is
+  the point, right up until that phone is flat, gone home, or was somebody's
+  borrowed tablet. `releaseRacer` and `releaseSeasonRacer` verify the uid, so
+  the one person who can undo a claim is the one who is not there.
+  `clearRacerClaim` and `clearSeasonClaim` are the same writes **without the uid
+  check**, and they are separate functions rather than a nullable `uid`
+  argument precisely so the player path keeps its check — a null slipping
+  through there would turn giving your racer back into a way to take someone
+  else's. They append the ordinary `racerReleased` / `seasonRacerReleased`
+  event carrying the uid that *was* holding it, and an unclaimed racer is a
+  no-op that logs nothing.
+  They sit on the two commissioner screens, and the split between them is the
+  split that already exists: **race settings frees tonight's claim, the season
+  roster on `/admin` frees the one that follows a player between game nights.**
+  Freeing the season claim deliberately does *not* reach into a race already
+  running — those were seeded from it and are authoritative once written, which
+  is the same rule as everywhere else. It is a mode, not a permission, exactly
+  as `playerManaged` is: there is no auth to enforce one with yet, and
+  pretending otherwise would be theatre. **Real accounts are still the actual
+  fix** — see Phase 2's remaining item — and they make this an escape hatch
+  rather than the mechanism.
 - **One free-text note per participant, not a DNF-only reason.** `Participant.note`
   is written by `setParticipantNote`, and the results view labels it by context —
   "Reason" for a retired car, "Note" otherwise. "Blew the engine on lap 3" and
@@ -813,7 +835,7 @@ it lists every race, which is what `/` wants.
 ## Verification
 
 ```bash
-npm run smoke         # 145 end-to-end checks against the real project
+npm run smoke         # 254 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 
@@ -888,6 +910,11 @@ nudging, per-car laps, manual correction.
   - **Done:** the standings rebuild — drivers and constructors in one view,
     sortable, with team colours and a mark for each leader. **The seasons and
     teams arc is complete.**
+  - **Done:** freeing a stuck claim. A racer claimed on a device nobody can
+    reach was unpickable forever; the commissioner can now hand it back from
+    race settings (this race) or the season roster (the claim that follows a
+    player between game nights). An escape hatch, not the fix — the fix is
+    accounts, below.
   - **Next:** post-game review to confirm the finishing order before a race is
     sealed.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
@@ -896,7 +923,12 @@ nudging, per-car laps, manual correction.
     admin gating via **custom claims set through the Firebase Admin SDK** (needs
     a service account key in Vercel env and a route handler to set claims).
     Anonymous auth stays alive for the table devices so game night still needs
-    no login.
+    no login. This is also what ends the stuck-claim problem properly: a claim
+    points at a uid, and today a uid is a *device*, so the same human on a
+    second phone is a different claimant. Signing in makes one human one uid —
+    with the wrinkle that upgrading an anonymous session on a second device
+    cannot keep that device's uid, so any claim standing in its name has to be
+    re-pointed as part of signing in.
 - **Phase 3 — the chatbot.** An *input adapter*, not a separate system. It gets
   the `lib/race.ts` functions as its tool surface and emits the same mutations
   the buttons do — never raw document writes. Anthropic calls go through a
