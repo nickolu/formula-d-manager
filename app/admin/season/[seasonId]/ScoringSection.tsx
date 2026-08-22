@@ -101,16 +101,12 @@ export default function ScoringSection({ seasonId }: { seasonId: string }) {
           : `The list above covers ${places} ${places === 1 ? "place" : "places"}, so this is what ${ordinal(places + 1)} and below score.`}
       </p>
 
-      {/* Both said out loud, because both are rules that otherwise read as
-          bugs: a retirement is scored, an absence is not. */}
+      {/* Said out loud because it otherwise reads as a bug: a retirement is
+          scored, not zeroed. */}
       <p className="text-xs text-neutral-500">
         There is no separate DNF score. A car that retires is placed by when it
         went out — first one out finishes last — so its position already says
         what happened, and it scores whatever that position is worth.
-      </p>
-      <p className="text-xs text-neutral-500">
-        A driver who missed the race entirely is a different thing, and scores
-        nothing at all.
       </p>
 
       <button
