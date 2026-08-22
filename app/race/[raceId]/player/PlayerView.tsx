@@ -95,7 +95,7 @@ export default function PlayerView({ raceId }: { raceId: string }) {
   }
 
   return (
-    <main className="flex min-h-screen flex-col gap-4 bg-neutral-950 p-4 text-white">
+    <main className="flex flex-col gap-4 p-4">
       <div className="flex items-baseline justify-between text-neutral-400">
         <span className="text-xl">Round {live.currentRound}</span>
         <span className="font-mono text-2xl tabular-nums">

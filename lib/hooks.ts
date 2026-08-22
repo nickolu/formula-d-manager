@@ -1,6 +1,6 @@
 "use client";
 
-import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
+import { collection, limit, onSnapshot, orderBy, query } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import { db } from "./firebase";
 import { liveDoc } from "./race";
@@ -12,6 +12,7 @@ import type {
   Player,
   PlayerId,
   Race,
+  RaceEvent,
   Season,
 } from "./types";
 
@@ -105,6 +106,37 @@ export function useRaceList() {
 
 export function useRaces() {
   return useRaceList().races;
+}
+
+/**
+ * The race's event log, newest first. One listener, like every other hook here.
+ *
+ * Capped rather than unbounded: a long race is thousands of turnAdvanced
+ * events and the history view is something you scroll, not something you audit
+ * — the log itself stays complete in Firestore either way.
+ *
+ * `at` is a serverTimestamp, so it is NULL in the local snapshot until the
+ * server acknowledges the write. With the persistent cache on, every event
+ * this device writes renders once that way. Callers must not assume it is set.
+ */
+export function useRaceEvents(raceId: string, max = 300) {
+  const [events, setEvents] = useState<RaceEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, "races", raceId, "events"),
+      orderBy("at", "desc"),
+      limit(max),
+    );
+    const unsubscribe = onSnapshot(q, (snap) => {
+      setEvents(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as RaceEvent));
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, [raceId, max]);
+
+  return { events, loading };
 }
 
 /**

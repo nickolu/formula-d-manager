@@ -183,6 +183,28 @@ it already exists so it can never clobber a scoring table tuned in the console.
   deliberately **does not auto-redirect when exactly one race is live**: it
   would save a tap at the cost of the root behaving differently week to week,
   and it would strand anyone trying to reach a finished race.
+- **Player subviews are real routes, not conditional render.** A player lands
+  cold on a phone with no navigation history, so every subview has to be
+  reachable by URL and survive a reload. `app/race/[raceId]/player/layout.tsx`
+  is a server component that awaits `params` and hands the id to
+  `PlayerTabs`, a fixed **bottom** tab bar — thumb-reachable, which a top bar
+  is not, and it survives the page scrolling. Active state comes from
+  `usePathname`, not from state, which is what makes a cold load land on the
+  right tab. Only subviews that exist get a tab: a tab leading to a 404 is
+  worse than no tab.
+- The **history subview** renders the event log as sentences, newest first —
+  the log is the product, and this is the first view that shows it as such.
+  `describe()` in `HistoryView.tsx` switches exhaustively over `RaceEvent` and
+  ends in a `never` assignment, so adding a variant to the union without
+  describing it fails `npx tsc --noEmit` instead of rendering a blank line at
+  the table. `BaseEvent.at` is typed `Timestamp | null` for the same reason:
+  it is a `serverTimestamp()` and the persistent cache surfaces a local write
+  before the server acknowledges it, so every event this device appends
+  renders once with no timestamp. Corrections are shown in chronological place
+  with their target's sentence beneath them rather than folded into the target
+  — a correction that happened a minute ago must not vanish into a row from
+  half an hour ago — and `targetEventId: ""` (what `uncompleteLap` writes) is a
+  legitimate value meaning "no specific target".
 - `app/Nav.tsx` is opt-in per page, **not** rendered from `layout.tsx`. The big
   screen is read from across a room and the tablet's buttons are sized for a
   thumb at arm's length; neither wants nav chrome, and the layout would give
@@ -252,6 +274,8 @@ nudging, per-car laps, manual correction.
   - **Done:** the renames — `device` → `player`, `edit` → `results` — and the
     root split: `/` is the player landing, `/admin` is the commissioner's.
   - **Done:** rewinding a turn now resets the clock and leaves it paused.
+  - **Done:** the player view is a route with subviews and a bottom tab bar,
+    and the first subview is history — the event log read back as sentences.
   - **Next:** race history and player pages (both are views over the same
     `result` data), then post-game review to confirm the finishing order before
     a race is sealed.

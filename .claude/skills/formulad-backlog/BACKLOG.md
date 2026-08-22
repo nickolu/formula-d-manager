@@ -15,7 +15,7 @@ fields exist.
 | 1 | 2 | Rename device → player | **done** | — |
 | 2 | 5 | Rename edit → results | **done** | — |
 | 3 | 12 | Player landing + `/admin` split | **done** | 2 |
-| 4 | 3 | Player view IA + history subview | todo | 2 |
+| 4 | 3 | Player view IA + history subview | **done** | 2 |
 | 5 | 4 | Go back a turn (reset + auto-pause) | **done** | — |
 | 6 | 6 | Race settings view | todo | 3, 4 |
 | 7 | 7 | Between-rounds pause step | todo | 6 |
@@ -42,6 +42,15 @@ splitting them means editing `next.config.ts` and every internal link twice.
   field 4 will define.
 - **6** gates 7, 9 and 11 — each needs a per-race setting and a place to put it.
 - **10 before 10.5 and 11**: both need the claimed-racer identity 10 defines.
+
+## Reopened
+
+- **1b — standings rows overflow at phone width.** Verified by screenshot at
+  390px: the list rows in the player view (`name · lap · +lap · DNF · ↑ · ↓`)
+  are wider than the viewport, so the ↑/↓ fallback sits off-screen for the
+  longer names. Item 1's spec says to reopen this as a mobile polish pass
+  rather than fix it silently inside another item — so here it is. The track
+  rendering does not have the problem. Not blocking anything.
 
 ## Open questions
 

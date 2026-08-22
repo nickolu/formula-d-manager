@@ -140,7 +140,13 @@ export type EventSource = "manual" | "chat" | "system";
 
 interface BaseEvent {
   id: string;
-  at: Timestamp;
+  /**
+   * NULL until the server acknowledges the write. `at` is a serverTimestamp and
+   * the persistent local cache surfaces the write immediately, so every event
+   * this device appends renders once with no timestamp. Typed nullable so a
+   * reader that forgets fails the typecheck rather than at the table.
+   */
+  at: Timestamp | null;
   /** Chat-sourced entries are the ones most likely to be wrong; keep them labelled. */
   source: EventSource;
   actor: string | null;
