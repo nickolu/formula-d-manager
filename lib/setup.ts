@@ -48,6 +48,7 @@ export async function createRace(input: NewRaceInput): Promise<string> {
     currentPlayerId: ids[0] ?? null,
     turnStartedAt: serverTimestamp(),
     turnDurationMs: input.turnSeconds * 1000,
+    turnDurationDefaultMs: input.turnSeconds * 1000,
     currentRound: 1,
     // The starting grid is both the opening standings and the first round's
     // frozen order; they diverge as soon as anyone overtakes.

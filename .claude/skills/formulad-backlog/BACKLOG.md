@@ -16,7 +16,7 @@ fields exist.
 | 2 | 5 | Rename edit → results | **done** | — |
 | 3 | 12 | Player landing + `/admin` split | **done** | 2 |
 | 4 | 3 | Player view IA + history subview | todo | 2 |
-| 5 | 4 | Go back a turn (reset + auto-pause) | todo | — |
+| 5 | 4 | Go back a turn (reset + auto-pause) | **done** | — |
 | 6 | 6 | Race settings view | todo | 3, 4 |
 | 7 | 7 | Between-rounds pause step | todo | 6 |
 | 8 | 9 | Delete a race | todo | 6 |

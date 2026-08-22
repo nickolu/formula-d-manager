@@ -41,12 +41,27 @@ once: the round ends and the next `roundOrder` is snapshotted from
 a mid-round overtake affect the *next* round instead of reshuffling a round
 already in progress.
 
-`rewindTurn` walks the same list backwards, for a mis-tapped turn. Because
-rollover overwrites `roundOrder`, it can only cross a boundary thanks to
-`previousRoundOrder` — one round of history, saved by `advanceTurn` at each
-rollover and cleared once used. Rewinding deliberately does **not** try to
-restore `positionOrder`: standings are human-nudged and the operator is looking
-straight at the board.
+`rewindTurn` walks the same list backwards, for a mis-tapped turn. It leaves
+the race **paused with a full clock**: `turnStartedAt: null` (which `readTimer`
+already reads as paused — no pause flag was added) and `turnDurationMs` reset
+to `turnDurationDefaultMs`. Rewinding means something went wrong at the table
+and people are arguing about it; starting a clock on that argument is wrong,
+and handing back the four seconds that were left is worse. Only `turnRewound`
+is emitted — "a rewind leaves the race paused with a fresh clock" is a rule of
+the system, not a separate thing that happened, so a replay applies it without
+a second event.
+
+`turnDurationDefaultMs` exists because `turnDurationMs` is **not** the race's
+configured turn length: `pauseTurn` overwrites it with whatever time was left.
+It is seeded by `createRace`, optional (races predating it fall back to
+`turnDurationMs` — no migrations here), and it is the field the race settings
+view edits.
+
+Because rollover overwrites `roundOrder`, a rewind can only cross a boundary
+thanks to `previousRoundOrder` — one round of history, saved by `advanceTurn`
+at each rollover and cleared once used. Rewinding deliberately does **not** try
+to restore `positionOrder`: standings are human-nudged and the operator is
+looking straight at the board.
 
 **A round is not a lap.** One round = every car moves once. A lap spans many
 rounds. And laps are *per car* — the leader can be on lap 2 while a back marker
@@ -198,7 +213,7 @@ it already exists so it can never clobber a scoring table tuned in the console.
 ## Verification
 
 ```bash
-npm run smoke         # 57 end-to-end checks against the real project
+npm run smoke         # 63 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 
@@ -236,6 +251,7 @@ nudging, per-car laps, manual correction.
     DNF. Order-only by design; the no-board-state rule stands.
   - **Done:** the renames — `device` → `player`, `edit` → `results` — and the
     root split: `/` is the player landing, `/admin` is the commissioner's.
+  - **Done:** rewinding a turn now resets the clock and leaves it paused.
   - **Next:** race history and player pages (both are views over the same
     `result` data), then post-game review to confirm the finishing order before
     a race is sealed.

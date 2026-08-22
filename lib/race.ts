@@ -125,9 +125,19 @@ export async function advanceTurn(raceId: string, who: Actor) {
  * one round boundary — that is the whole reason advanceTurn saves
  * previousRoundOrder.
  *
- * Re-anchors the clock, so the corrected player gets a fresh turn. It makes no
- * attempt to restore positionOrder as it was: standings are human-nudged and
- * the operator is looking straight at the board.
+ * Leaves the race PAUSED with a full clock: turnStartedAt null (which is what
+ * readTimer already reads as paused — do not add a pause flag) and
+ * turnDurationMs reset to the configured turn length. Rewinding means
+ * something went wrong at the table and people are talking about it; starting
+ * a clock on that argument would be the wrong thing to do, and handing back
+ * the four seconds that were left would be worse.
+ *
+ * Only turnRewound is emitted. "A rewind leaves the race paused with a fresh
+ * clock" is a rule of the system, not a separate thing that happened, so a
+ * replay applies it without a second event.
+ *
+ * It makes no attempt to restore positionOrder as it was: standings are
+ * human-nudged and the operator is looking straight at the board.
  */
 export async function rewindTurn(raceId: string, who: Actor) {
   await runTransaction(db, async (tx) => {
@@ -144,7 +154,8 @@ export async function rewindTurn(raceId: string, who: Actor) {
       const target = live.roundOrder[withinRound];
       tx.update(liveDoc(raceId), {
         currentPlayerId: target,
-        turnStartedAt: serverTimestamp(),
+        turnStartedAt: null,
+        turnDurationMs: live.turnDurationDefaultMs ?? live.turnDurationMs,
         updatedAt: serverTimestamp(),
       });
       appendEvent(tx, raceId, who, {
@@ -167,7 +178,8 @@ export async function rewindTurn(raceId: string, who: Actor) {
 
     tx.update(liveDoc(raceId), {
       currentPlayerId: previous[lastIndex],
-      turnStartedAt: serverTimestamp(),
+      turnStartedAt: null,
+      turnDurationMs: live.turnDurationDefaultMs ?? live.turnDurationMs,
       currentRound: live.currentRound - 1,
       roundOrder: previous,
       previousRoundOrder: null,

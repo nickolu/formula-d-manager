@@ -13,10 +13,12 @@ import { getAuth, signInAnonymously } from "firebase/auth";
 import {
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
   onSnapshot,
+  updateDoc,
 } from "firebase/firestore";
 import { app, db } from "../lib/firebase";
 import {
@@ -36,6 +38,10 @@ import { DEFAULT_SCORING } from "../lib/seasons";
 import { createRace } from "../lib/setup";
 import { readTimer } from "../lib/timer";
 import type { LiveState, Participant, Race } from "../lib/types";
+
+/** The race's configured turn length — what a rewind must reset the clock to. */
+const TURN_SECONDS = 90;
+const TURN_MS = TURN_SECONDS * 1000;
 
 let failures = 0;
 
@@ -97,7 +103,7 @@ async function main() {
   const raceId = await createRace({
     track: "SMOKE-TEST",
     lapCount: 2,
-    turnSeconds: 90,
+    turnSeconds: TURN_SECONDS,
     playerNames: ["Alpha", "Bravo", "Charlie"],
   });
   console.log(`created race ${raceId}\n`);
@@ -113,6 +119,7 @@ async function main() {
   check("starts on round 1", initial.currentRound === 1, `round ${initial.currentRound}`);
   check("leader plays first", initial.currentPlayerId === "alpha");
   check("timer derives ~90s", readTimer(initial, Date.now()).remainingMs > 85_000);
+  check("the configured turn length is seeded", initial.turnDurationDefaultMs === TURN_MS, `${initial.turnDurationDefaultMs}`);
 
   console.log("\nturns within a round:");
   await advanceTurn(raceId, { source: "manual" });
@@ -186,7 +193,14 @@ async function main() {
   const rewound = await waitFor(states, (s) => s.currentPlayerId === "charlie", "charlie again", 10_000, mark);
   check("rewind steps back within the round", rewound.currentRound === 2, `round ${rewound.currentRound}`);
   check("rewind leaves the round order alone", rewound.roundOrder.join(",") === "charlie,alpha,bravo");
-  check("rewind re-anchors the clock", !readTimer(rewound, Date.now()).isPaused);
+  // The pause above left turnDurationMs holding a partial turn, so a full
+  // duration here can only have come from the reset.
+  check("rewind auto-pauses", readTimer(rewound, Date.now()).isPaused);
+  check(
+    "rewind resets the clock to the configured turn length",
+    rewound.turnDurationMs === TURN_MS,
+    `${rewound.turnDurationMs}`,
+  );
 
   mark = states.length;
   await rewindTurn(raceId, { source: "manual" });
@@ -203,8 +217,33 @@ async function main() {
   );
   check("rewind lands on the last car of that round", crossed.currentPlayerId === "charlie");
   check("only one round of history is kept", crossed.previousRoundOrder === null);
+  check("crossing a round boundary resets the clock too", crossed.turnDurationMs === TURN_MS, `${crossed.turnDurationMs}`);
+  check("crossing a round boundary auto-pauses too", readTimer(crossed, Date.now()).isPaused);
 
+  // Races created before turnDurationDefaultMs existed have no value to reset
+  // to. There are no migrations here, so the fallback is the behaviour — faked
+  // by stripping the field, which is a thing only a test may do directly.
+  mark = states.length;
+  await updateDoc(liveDoc(raceId), {
+    turnDurationDefaultMs: deleteField(),
+    turnDurationMs: 12_345,
+  });
+  await waitFor(states, (s) => s.turnDurationMs === 12_345, "legacy-shaped live doc", 10_000, mark);
+
+  mark = states.length;
   await rewindTurn(raceId, { source: "manual" }); // charlie -> bravo
+  const legacy = await waitFor(states, (s) => s.currentPlayerId === "bravo", "bravo", 10_000, mark);
+  check("a race with no configured duration rewinds without crashing", legacy.currentPlayerId === "bravo");
+  check("...and keeps whatever duration it had", legacy.turnDurationMs === 12_345, `${legacy.turnDurationMs}`);
+  check("...and still auto-pauses", readTimer(legacy, Date.now()).isPaused);
+
+  mark = states.length;
+  await updateDoc(liveDoc(raceId), {
+    turnDurationDefaultMs: TURN_MS,
+    turnDurationMs: TURN_MS,
+  });
+  await waitFor(states, (s) => s.turnDurationDefaultMs === TURN_MS, "duration restored", 10_000, mark);
+
   await rewindTurn(raceId, { source: "manual" }); // bravo -> alpha
   await rejects(
     () => rewindTurn(raceId, { source: "manual" }),

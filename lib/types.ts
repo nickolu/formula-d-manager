@@ -104,6 +104,15 @@ export interface LiveState {
   currentPlayerId: PlayerId | null;
   turnStartedAt: Timestamp | null;
   turnDurationMs: number;
+  /**
+   * The race's configured turn length. Distinct from turnDurationMs, which
+   * pauseTurn overwrites with whatever time was left — so without this there
+   * is no record of what a full turn is, and nothing to reset the clock to.
+   *
+   * Optional: races created before the field existed simply lack it, and every
+   * reader falls back to turnDurationMs. There are no migrations here.
+   */
+  turnDurationDefaultMs?: number;
   /** One round = every car has moved once. Many rounds make a lap. */
   currentRound: number;
   positionOrder: PlayerId[];
