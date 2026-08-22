@@ -473,6 +473,43 @@ export async function releaseSeasonRacer(
 }
 
 /**
+ * The commissioner's override for the season claim — `clearRacerClaim`'s
+ * counterpart, and it exists for the same reason.
+ *
+ * The season claim is the one that follows a player from week to week, so a
+ * stale one is the worse of the two: it seeds every race created afterwards,
+ * which means a phone that claimed once and then died keeps taking that racer
+ * on grids it will never sit at. `releaseSeasonRacer` needs the holder's uid;
+ * the holder is exactly who is not here.
+ *
+ * Clearing this does **not** clear the claim inside a race that has already
+ * started — those were seeded from here and are authoritative once written, so
+ * they are freed from race settings. Two claims, two places, the same rule as
+ * everywhere else in this file.
+ */
+export async function clearSeasonClaim(
+  seasonId: string,
+  playerId: PlayerId,
+  who: Actor,
+) {
+  await runTransaction(db, async (tx) => {
+    const ref = seasonMemberDoc(seasonId, playerId);
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error(`${playerId} is not in this season`);
+
+    const uid = (snap.data().claimedBy ?? null) as string | null;
+    if (!uid) return; // nobody holds it — nothing happened, so nothing is logged
+
+    tx.update(ref, { claimedBy: null });
+    appendSeasonEvent(tx, seasonId, who, {
+      type: "seasonRacerReleased",
+      playerId,
+      uid,
+    });
+  });
+}
+
+/**
  * Deletes a season, and **refuses one that has any race**.
  *
  * Cascading would mean deleting races, and deleteRace already refuses anything

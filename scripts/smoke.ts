@@ -25,6 +25,7 @@ import {
   advanceTurn,
   amendRaceResult,
   claimRacer,
+  clearRacerClaim,
   completeLap,
   deleteRace,
   finishRace,
@@ -55,6 +56,7 @@ import {
 import {
   addSeasonMember,
   claimSeasonRacer,
+  clearSeasonClaim,
   createSeason,
   DEFAULT_SCORING,
   deleteSeason,
@@ -690,6 +692,30 @@ async function main() {
   await releaseRacer(raceId, "alpha", PHONE_B, { source: "manual" });
   check("releasing your own racer frees it", (await claimOf("alpha")) === null);
 
+  // The commissioner's override, for the phone that is not in the room. It is
+  // the same write without the uid check — which is exactly why it is a
+  // separate function: the player path must keep its check.
+  await claimRacer(raceId, "alpha", PHONE_A, { source: "manual" });
+  await clearRacerClaim(raceId, "alpha", { source: "manual" });
+  check(
+    "the commissioner can free a racer without the holder's uid",
+    (await claimOf("alpha")) === null,
+  );
+  check(
+    "...and the racer is claimable again afterwards",
+    await claimRacer(raceId, "alpha", PHONE_B, { source: "manual" }).then(
+      () => true,
+      () => false,
+    ),
+  );
+  await releaseRacer(raceId, "alpha", PHONE_B, { source: "manual" });
+  await clearRacerClaim(raceId, "alpha", { source: "manual" });
+  check("freeing an unclaimed racer is a no-op, not an error", true);
+  await rejects(
+    () => clearRacerClaim(raceId, "nobody", { source: "manual" }),
+    "freeing someone who is not in the race is refused",
+  );
+
   console.log("\ncar status:");
   const statusOf = async (id: string) =>
     ((await getDoc(doc(db, "races", raceId, "participants", id))).data() as Participant)
@@ -1069,6 +1095,24 @@ async function main() {
   check(
     "the holder can give it back",
     (await getDoc(seasonMemberDoc(seasonId, foxtrot))).data()?.claimedBy === null,
+  );
+
+  // A season claim seeds every race made afterwards, so a stale one is the
+  // worse of the two to be stuck with. The commissioner frees it from the
+  // roster without needing the uid that is not here.
+  await claimSeasonRacer(seasonId, foxtrot, "uid-smoke-gone", null, {
+    source: "manual",
+  });
+  await clearSeasonClaim(seasonId, foxtrot, { source: "manual" });
+  check(
+    "the commissioner can free a season claim without the holder's uid",
+    (await getDoc(seasonMemberDoc(seasonId, foxtrot))).data()?.claimedBy === null,
+  );
+  await clearSeasonClaim(seasonId, foxtrot, { source: "manual" });
+  check("freeing an unclaimed member is a no-op, not an error", true);
+  await rejects(
+    () => clearSeasonClaim(seasonId, "nobody", { source: "manual" }),
+    "freeing someone who is not in the season is refused",
   );
   check(
     "season claims are logged",
