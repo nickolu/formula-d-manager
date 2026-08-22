@@ -31,6 +31,7 @@ import {
   resumeTurn,
   rewindTurn,
   setDnf,
+  setParticipantNote,
   setPositionOrder,
   startRace,
   startRound,
@@ -436,6 +437,25 @@ async function main() {
     "a race that hasn't been finished cannot be deleted",
   );
 
+  console.log("\nnotes:");
+  const noteOf = async (id: string) =>
+    ((await getDoc(doc(db, "races", raceId, "participants", id))).data() as Participant)
+      .note;
+  await setParticipantNote(raceId, "bravo", "  blew the engine on lap 1  ", { source: "manual" });
+  check("a note saves, trimmed", (await noteOf("bravo")) === "blew the engine on lap 1", `${await noteOf("bravo")}`);
+  // bravo is retired at this point; un-retiring must not take the note with it.
+  await setDnf(raceId, "bravo", false, { source: "manual" });
+  check("a note survives un-retiring", (await noteOf("bravo")) === "blew the engine on lap 1");
+  await setDnf(raceId, "bravo", true, { source: "manual" });
+  check("...and re-retiring", (await noteOf("bravo")) === "blew the engine on lap 1");
+  await setParticipantNote(raceId, "bravo", "", { source: "manual" });
+  check("an empty note clears it", (await noteOf("bravo")) === "");
+  await setParticipantNote(raceId, "bravo", "engine, lap 1", { source: "manual" });
+  await rejects(
+    () => setParticipantNote(raceId, "delta", "nope", { source: "manual" }),
+    "a note on a car that isn't in the race is refused",
+  );
+
   console.log("\nscoring is pure — no Firestore involved:");
   check("winner takes the top of the table", pointsFor(1, false, DEFAULT_SCORING) === 10);
   check("past the table scores the tail value", pointsFor(99, false, DEFAULT_SCORING) === DEFAULT_SCORING.pointsBeyondTable);
@@ -493,14 +513,23 @@ async function main() {
     "raceFinished logged once",
     finalTypes.filter((t) => t === "raceFinished").length === 1,
   );
+  check("setting and clearing a note are both logged", finalTypes.filter((t) => t === "participantNoteSet").length === 3, `${finalTypes.filter((t) => t === "participantNoteSet").length}`);
+  await setParticipantNote(raceId, "alpha", "won it on the last corner", { source: "manual" });
+  check(
+    "notes are editable on a sealed race",
+    ((await getDoc(doc(db, "races", raceId, "participants", "alpha"))).data() as Participant)
+      .note === "won it on the last corner",
+  );
   check(
     "every rewind is logged",
     finalTypes.filter((t) => t === "turnRewound").length === 9,
     `${finalTypes.filter((t) => t === "turnRewound").length}`,
   );
+  // Three from the retirement section, two more from the note test proving a
+  // note survives the flag going off and back on.
   check(
     "every retirement change is logged",
-    finalTypes.filter((t) => t === "dnfChanged").length === 3,
+    finalTypes.filter((t) => t === "dnfChanged").length === 5,
     `${finalTypes.filter((t) => t === "dnfChanged").length}`,
   );
 

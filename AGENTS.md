@@ -209,6 +209,16 @@ it already exists so it can never clobber a scoring table tuned in the console.
 - **Nobody's turn means two different things** — the race is over, or it is
   between rounds. Every view discriminates on `race.status === "complete"`,
   never on the null `currentPlayerId`. `finishRace` nulls it too.
+- **One free-text note per participant, not a DNF-only reason.** `Participant.note`
+  is written by `setParticipantNote`, and the results view labels it by context —
+  "Reason" for a retired car, "Note" otherwise. "Blew the engine on lap 3" and
+  "won it on the last corner" are the same shape of data, so one field avoids a
+  second schema later, and a note that isn't coupled to the DNF flag survives
+  un-retiring instead of being orphaned or silently destroyed. An empty string
+  *clears* the note rather than deleting the field, so the clearing still
+  appends an event. Notes are **not** on `RaceResult`: that is a scoring cache,
+  notes are not scoring input, and `computeStandings` stays a pure function of
+  finishes. They stay editable after a race is sealed — they are commentary.
 - **`deleteRace` is the one mutation that appends no event** — there would be
   nowhere to append it to. The event log survives: the rules forbid deleting
   event documents, so they are left orphaned under a race that no longer
@@ -283,7 +293,7 @@ it already exists so it can never clobber a scoring table tuned in the console.
 ## Verification
 
 ```bash
-npm run smoke         # 105 end-to-end checks against the real project
+npm run smoke         # 112 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 
@@ -324,6 +334,7 @@ nudging, per-car laps, manual correction.
   - **Done:** rewinding a turn now resets the clock and leaves it paused.
   - **Done:** the player view is a route with subviews and a bottom tab bar,
     and the first subview is history — the event log read back as sentences.
+  - **Done:** a note per car in the results view — usually why they retired.
   - **Done:** race deletion, from race settings and behind a named confirmation
     that says it will rewrite the season table.
   - **Done:** a between-rounds pause — the table confirms the order before the

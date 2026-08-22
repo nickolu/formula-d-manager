@@ -529,6 +529,38 @@ export async function completeLap(
   });
 }
 
+/**
+ * Records why a car's race went the way it did. Usually a retirement reason,
+ * but any car can have one.
+ *
+ * An empty string CLEARS the note rather than deleting the field, so the
+ * clearing still appends an event and the history shows it happening.
+ *
+ * Notes stay editable after the race is sealed: they are commentary, not
+ * results, and finishRace's validation of `order` is untouched by them.
+ */
+export async function setParticipantNote(
+  raceId: string,
+  playerId: PlayerId,
+  note: string,
+  who: Actor,
+) {
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(participantDoc(raceId, playerId));
+    if (!snap.exists()) throw new Error(`${playerId} is not in this race`);
+
+    const trimmed = note.trim();
+    if (((snap.data() as Participant).note ?? "") === trimmed) return;
+
+    tx.update(participantDoc(raceId, playerId), { note: trimmed });
+    appendEvent(tx, raceId, who, {
+      type: "participantNoteSet",
+      playerId,
+      note: trimmed,
+    });
+  });
+}
+
 /** Undoes a mis-tapped lap, keeping the correction in the log. */
 export async function uncompleteLap(
   raceId: string,

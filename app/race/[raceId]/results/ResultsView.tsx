@@ -6,6 +6,7 @@ import {
   completeLap,
   finishRace,
   setDnf,
+  setParticipantNote,
   setPositionOrder,
   uncompleteLap,
 } from "@/lib/race";
@@ -25,6 +26,11 @@ export default function ResultsView({ raceId }: { raceId: string }) {
   const participants = useParticipants(raceId);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+
+  // Per-player note drafts, keyed by id. Null/absent means "show what's stored"
+  // — the same pin-on-first-edit trick as the order below, so an incoming write
+  // can't yank a half-typed note away.
+  const [noteDrafts, setNoteDrafts] = useState<Record<PlayerId, string>>({});
 
   // Null until someone reorders, so the list tracks live state right up to the
   // first edit and then pins — no effect, and an incoming turn change can't
@@ -90,69 +96,105 @@ export default function ResultsView({ raceId }: { raceId: string }) {
           const isOut = retired.has(id);
 
           return (
-            <div className="flex items-center gap-2 rounded border border-neutral-800 p-3">
-              <span className="w-5 text-neutral-500">{i + 1}</span>
-              <span
-                className={`flex-1 ${isOut ? "line-through opacity-50" : ""}`}
-              >
-                {nameOf(id)}
-              </span>
+            <div className="flex flex-col gap-2 rounded border border-neutral-800 p-3">
+              <div className="flex items-center gap-2">
+                <span className="w-5 text-neutral-500">{i + 1}</span>
+                <span
+                  className={`flex-1 ${isOut ? "line-through opacity-50" : ""}`}
+                >
+                  {nameOf(id)}
+                </span>
 
-              <button
-                onClick={() =>
-                  run(`Lap removed for ${nameOf(id)}`, () =>
-                    uncompleteLap(raceId, id, { source: "manual" }), false)
-                }
-                disabled={busy || laps === 0}
-                className="rounded border border-neutral-700 px-2 py-1 text-xs disabled:opacity-30"
-              >
-                −
-              </button>
-              <span className="w-14 text-center text-xs text-neutral-400">
-                lap {laps}
-              </span>
-              <button
-                onClick={() =>
-                  run(`Lap added for ${nameOf(id)}`, () =>
-                    completeLap(raceId, id, { source: "manual" }), false)
-                }
-                disabled={busy}
-                className="rounded border border-neutral-700 px-2 py-1 text-xs disabled:opacity-30"
-              >
-                +
-              </button>
+                <button
+                  onClick={() =>
+                    run(`Lap removed for ${nameOf(id)}`, () =>
+                      uncompleteLap(raceId, id, { source: "manual" }), false)
+                  }
+                  disabled={busy || laps === 0}
+                  className="rounded border border-neutral-700 px-2 py-1 text-xs disabled:opacity-30"
+                >
+                  −
+                </button>
+                <span className="w-14 text-center text-xs text-neutral-400">
+                  lap {laps}
+                </span>
+                <button
+                  onClick={() =>
+                    run(`Lap added for ${nameOf(id)}`, () =>
+                      completeLap(raceId, id, { source: "manual" }), false)
+                  }
+                  disabled={busy}
+                  className="rounded border border-neutral-700 px-2 py-1 text-xs disabled:opacity-30"
+                >
+                  +
+                </button>
 
-              <button
-                onClick={() =>
+                <button
+                  onClick={() =>
+                    run(
+                      isOut ? `${nameOf(id)} is back in` : `${nameOf(id)} retired`,
+                      () => setDnf(raceId, id, !isOut, { source: "manual" }),
+                      false,
+                    )
+                  }
+                  disabled={busy}
+                  className={`rounded border px-2 py-1 text-xs disabled:opacity-30 ${
+                    isOut
+                      ? "border-red-800 bg-red-950/50 text-red-400"
+                      : "border-neutral-700 text-neutral-400"
+                  }`}
+                >
+                  DNF
+                </button>
+                <button
+                  onClick={() => move(i, -1)}
+                  disabled={busy || i === 0}
+                  className="rounded border border-neutral-700 px-3 py-1 disabled:opacity-30"
+                >
+                  ↑
+                </button>
+                <button
+                  onClick={() => move(i, 1)}
+                  disabled={busy || i === order.length - 1}
+                  className="rounded border border-neutral-700 px-3 py-1 disabled:opacity-30"
+                >
+                  ↓
+                </button>
+              </div>
+
+              {/* Not behind a disclosure: a note is far likelier to get
+                  written if the box is already there. A retired car's is
+                  labelled "Reason", which is the case this exists for. */}
+              <input
+                value={noteDrafts[id] ?? participants.get(id)?.note ?? ""}
+                onChange={(e) =>
+                  setNoteDrafts((d) => ({ ...d, [id]: e.target.value }))
+                }
+                onBlur={(e) =>
                   run(
-                    isOut ? `${nameOf(id)} is back in` : `${nameOf(id)} retired`,
-                    () => setDnf(raceId, id, !isOut, { source: "manual" }),
+                    e.target.value.trim()
+                      ? `Note saved for ${nameOf(id)}`
+                      : `Note cleared for ${nameOf(id)}`,
+                    async () => {
+                      await setParticipantNote(raceId, id, e.target.value, {
+                        source: "manual",
+                      });
+                      setNoteDrafts((d) => {
+                        const next = { ...d };
+                        delete next[id];
+                        return next;
+                      });
+                    },
                     false,
                   )
                 }
-                disabled={busy}
-                className={`rounded border px-2 py-1 text-xs disabled:opacity-30 ${
+                placeholder={isOut ? "Reason — what happened?" : "Note"}
+                className={`w-full rounded border bg-neutral-900 p-2 text-sm ${
                   isOut
-                    ? "border-red-800 bg-red-950/50 text-red-400"
-                    : "border-neutral-700 text-neutral-400"
+                    ? "border-red-900/60 placeholder:text-red-400/60"
+                    : "border-neutral-800 placeholder:text-neutral-600"
                 }`}
-              >
-                DNF
-              </button>
-              <button
-                onClick={() => move(i, -1)}
-                disabled={busy || i === 0}
-                className="rounded border border-neutral-700 px-3 py-1 disabled:opacity-30"
-              >
-                ↑
-              </button>
-              <button
-                onClick={() => move(i, 1)}
-                disabled={busy || i === order.length - 1}
-                className="rounded border border-neutral-700 px-3 py-1 disabled:opacity-30"
-              >
-                ↓
-              </button>
+              />
             </div>
           );
         }}

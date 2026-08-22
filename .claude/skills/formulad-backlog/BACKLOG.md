@@ -20,7 +20,7 @@ fields exist.
 | 6 | 6 | Race settings view | **done** | 3, 4 |
 | 7 | 7 | Between-rounds pause step | **done** | 6 |
 | 8 | 9 | Delete a race | **done** | 6 |
-| 9 | 8 | Notes in results | todo | 5 |
+| 9 | 8 | Notes in results | **done** | 5 |
 | 10 | 10 | My Racer identity | todo | 3 |
 | 11 | 10.5 | Join a race | todo | 10 |
 | 12 | 11 | Per-player car status | todo | 6, 10 |

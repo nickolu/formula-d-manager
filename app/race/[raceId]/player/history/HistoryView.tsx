@@ -121,6 +121,7 @@ function subjectOf(event: RaceEvent): PlayerId | null {
     case "lapCompleted":
     case "dnfChanged":
     case "playerRemoved":
+    case "participantNoteSet":
       return event.playerId;
     default:
       return null;
@@ -173,6 +174,10 @@ function describe(event: RaceEvent, nameOf: (id: PlayerId) => string): string {
       return event.dnf
         ? `${nameOf(event.playerId)} retired.`
         : `${nameOf(event.playerId)} is back in the race.`;
+    case "participantNoteSet":
+      return event.note
+        ? `Note on ${nameOf(event.playerId)}: ${event.note}`
+        : `Note on ${nameOf(event.playerId)} cleared.`;
     case "turnRewound":
       return `Turn stepped back to ${nameOf(event.toPlayerId)} (round ${event.round}) — clock reset and paused.`;
     case "turnPaused":

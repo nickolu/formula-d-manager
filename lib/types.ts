@@ -100,6 +100,18 @@ export interface Participant {
   lapsCompleted: number;
   finalPosition: number | null;
   dnf: boolean;
+  /**
+   * Free text about this car's race — usually why it didn't finish.
+   *
+   * Deliberately NOT a DNF-only reason field: "blew the engine on lap 3" and
+   * "won it on the last corner" are the same shape of data, so one note avoids
+   * a second schema later. It also survives un-retiring, where a reason tied to
+   * the flag would either be orphaned or silently destroyed.
+   *
+   * Not on RaceResult: that is a scoring cache, and notes are not scoring
+   * input — computeStandings stays a pure function of finishes.
+   */
+  note?: string;
 }
 
 /**
@@ -283,6 +295,13 @@ export interface PlayerRemovedEvent extends BaseEvent {
   playerId: PlayerId;
 }
 
+/** Commentary on one car's race. An empty note is a clearing, and is logged. */
+export interface ParticipantNoteSetEvent extends BaseEvent {
+  type: "participantNoteSet";
+  playerId: PlayerId;
+  note: string;
+}
+
 /** A mis-tapped turn, stepped back. Appended like any other mutation. */
 export interface TurnRewoundEvent extends BaseEvent {
   type: "turnRewound";
@@ -327,6 +346,7 @@ export type RaceEvent =
   | PositionOrderChangedEvent
   | LapCompletedEvent
   | DnfChangedEvent
+  | ParticipantNoteSetEvent
   | TurnRewoundEvent
   | TurnPausedEvent
   | TurnResumedEvent
