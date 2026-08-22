@@ -49,7 +49,6 @@ export const DEFAULT_SEASON_ID = "default";
 export const DEFAULT_SCORING: ScoringConfig = {
   positionPoints: [10, 8, 6, 5, 4, 3, 2, 1],
   pointsBeyondTable: 0,
-  dnfPoints: 0,
 };
 
 /**
@@ -81,9 +80,6 @@ function validateScoring(config: ScoringConfig) {
   }
   if (!Number.isFinite(config.pointsBeyondTable)) {
     throw new Error("Points beyond the table must be a number");
-  }
-  if (!Number.isFinite(config.dnfPoints)) {
-    throw new Error("DNF points must be a number");
   }
 }
 

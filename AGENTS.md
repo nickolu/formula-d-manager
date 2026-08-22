@@ -171,12 +171,24 @@ record of truth.
 missing, no strangers) because a partial order would silently under-count a
 season rather than fail.
 
-Two scoring rules that look like bugs and aren't:
+**A retirement is scored on its placing, like anything else.** There is
+deliberately no `dnfPoints`, and the reason is that the finishing order already
+encodes the retirement: the first car to blow up is placed last, the next one
+above it, and so on. The order *is* the ranking, so a separate DNF value would
+score the same fact twice and let a flag override a placing.
 
-- **A DNF scores `dnfPoints` regardless of track position**, so retiring from
-  the lead never out-scores finishing last.
+(An earlier version of this file recorded the opposite — a flat `dnfPoints`
+"so retiring from the lead never out-scores finishing last". That rule was
+solving a problem the finishing order already solves, because a car that
+retires from the lead is not placed first: it is placed where it went out.
+Seasons written before the change carry a stray `dnfPoints` in Firestore.
+Nothing reads it, and there is no migration, as usual.)
+
+One scoring rule that still looks like a bug and isn't:
+
 - **A retirement doesn't count as a podium and doesn't set `bestFinish`** — a
-  car that broke while running second did not finish second.
+  car that broke while running second did not finish second. It scores third's
+  points if it was placed third; it did not *finish* third.
 
 Ties break on countback (most wins, then most seconds, …), then player id for a
 stable order.
@@ -245,11 +257,12 @@ ordinary `joinRace` appending its own `playerJoined` event. It is a loop of
 transactions rather than one transaction, because the race list has to be
 queried first and the web SDK cannot query inside a transaction.
 
-**A missed race is not a DNF.** A member with no entry scores *nothing*, not
-`dnfPoints`. Invisible today at `dnfPoints: 0`, and not invisible the first time
-someone argues a DNF is worth a point. The standings `races` column means
-*races entered*, which is why the view prints how many races the season has run
-beside it: 0 of 7 and 0 of 0 are different facts.
+**A missed race is not a retirement.** A member with no entry scores *nothing*,
+and now that a retirement scores its placing the two are visibly different: a
+driver who blew up on lap one was there and is placed last, which is worth
+whatever last is worth; a driver who stayed home was not there at all. The
+standings `races` column means *races entered*, which is why the view prints how
+many races the season has run beside it: 0 of 7 and 0 of 0 are different facts.
 
 `computeStandings` still scores everyone it finds in a result, **not** only the
 current members — someone who ran three races and later left the league still

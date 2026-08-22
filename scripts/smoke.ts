@@ -194,7 +194,7 @@ async function main() {
       createSeason(
         {
           name: "SMOKE-TEST bad scoring",
-          scoringConfig: { positionPoints: [], pointsBeyondTable: 0, dnfPoints: 0 },
+          scoringConfig: { positionPoints: [], pointsBeyondTable: 0 },
         },
         { source: "manual" },
       ),
@@ -777,11 +777,13 @@ async function main() {
   );
 
   console.log("\nscoring is pure — no Firestore involved:");
-  check("winner takes the top of the table", pointsFor(1, false, DEFAULT_SCORING) === 10);
-  check("past the table scores the tail value", pointsFor(99, false, DEFAULT_SCORING) === DEFAULT_SCORING.pointsBeyondTable);
+  check("winner takes the top of the table", pointsFor(1, DEFAULT_SCORING) === 10);
+  check("past the table scores the tail value", pointsFor(99, DEFAULT_SCORING) === DEFAULT_SCORING.pointsBeyondTable);
+  // Retirement is not a special case: the order already says who went out and
+  // when, so the placing is the score.
   check(
-    "a DNF from the lead still scores a DNF",
-    pointsFor(1, true, DEFAULT_SCORING) === DEFAULT_SCORING.dnfPoints,
+    "a retirement scores its placing like any other result",
+    pointsFor(3, DEFAULT_SCORING) === DEFAULT_SCORING.positionPoints[2],
   );
 
   console.log("\nfinishing the race:");
@@ -862,8 +864,8 @@ async function main() {
     `charlie=${points.get("charlie")} alpha=${points.get("alpha")}`,
   );
   check(
-    "the retirement scores dnfPoints, not third place",
-    points.get("bravo") === DEFAULT_SCORING.dnfPoints,
+    "the retirement scores third place, because that is where it was placed",
+    points.get("bravo") === DEFAULT_SCORING.positionPoints[2],
     `bravo=${points.get("bravo")}`,
   );
   check("the winner leads the standings", standings[0]?.playerId === "charlie");
@@ -933,18 +935,18 @@ async function main() {
     `${echoRow?.points}pts/${echoRow?.races} races`,
   );
   check("the roster does not disturb the finishers", seeded[0]?.playerId === "charlie");
-  // Invisible while dnfPoints is 0, which is exactly why it is checked against
-  // a config where it isn't: absent is not retired.
-  const contrast = computeStandings(
-    [finished],
-    { ...DEFAULT_SCORING, dnfPoints: 1 },
-    seasonId,
-    [echo],
+  // Absent is not retired, and the difference is no longer subtle: a car that
+  // went out was there and is placed for it; a driver who stayed home was not.
+  check(
+    "a missed race scores nothing, a retirement scores its placing",
+    seeded.find((r) => r.playerId === echo)?.points === 0 &&
+      seeded.find((r) => r.playerId === "bravo")?.points ===
+        DEFAULT_SCORING.positionPoints[2],
   );
   check(
-    "a missed race scores nothing, a DNF scores dnfPoints",
-    contrast.find((r) => r.playerId === echo)?.points === 0 &&
-      contrast.find((r) => r.playerId === "bravo")?.points === 1,
+    "...and a missed race is not counted as an entry",
+    seeded.find((r) => r.playerId === echo)?.races === 0 &&
+      seeded.find((r) => r.playerId === "bravo")?.races === 1,
   );
 
   await removeSeasonMember(seasonId, echo, { source: "manual" });
@@ -1273,8 +1275,9 @@ async function main() {
     `${teamTable[0]?.teamId}=${teamTable[0]?.points}`,
   );
   check(
-    "a team whose only driver retired scores dnfPoints, not nothing special",
-    teamTable[1]?.points === DEFAULT_SCORING.dnfPoints,
+    "a team whose only driver retired still scores that driver's placing",
+    teamTable[1]?.points === DEFAULT_SCORING.positionPoints[2],
+    `${teamTable[1]?.points}`,
   );
   const emptyTeam = computeTeamStandings(
     [finished],

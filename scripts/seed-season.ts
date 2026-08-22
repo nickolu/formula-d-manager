@@ -19,7 +19,6 @@ async function main() {
   console.log(`season "${season.id}" (${season.name})`);
   console.log(`  positions      ${season.scoringConfig.positionPoints.join(", ")}`);
   console.log(`  beyond table   ${season.scoringConfig.pointsBeyondTable}`);
-  console.log(`  dnf            ${season.scoringConfig.dnfPoints}`);
   console.log("\nEdit these in the Firestore console — scoring is data, not code.");
   process.exit(0);
 }

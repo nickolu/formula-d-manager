@@ -17,14 +17,11 @@ import type {
  * The config lives in seasons.scoringConfig rather than in code because house
  * rules churn; changing them must not require a deploy.
  */
-export function pointsFor(
-  position: number,
-  dnf: boolean,
-  config: ScoringConfig,
-): number {
-  // A DNF is scored as a DNF regardless of where the car sat on track when it
-  // retired, so retiring from the lead never out-scores finishing last.
-  if (dnf) return config.dnfPoints;
+export function pointsFor(position: number, config: ScoringConfig): number {
+  // Retirement is deliberately NOT a special case. The finishing order already
+  // encodes it: the first car to blow up is placed last, the next one above it,
+  // and so on, so a retirement's position *is* its ranking. A separate dnfPoints
+  // would score the same fact twice and let a flag override a placing.
   const table = config.positionPoints;
   // position is 1-based; anything past the end of the table gets the tail value.
   return position <= table.length
@@ -37,12 +34,8 @@ export function scoreRace(
   result: RaceResult,
   config: ScoringConfig,
 ): Map<PlayerId, number> {
-  const dnf = new Set(result.dnf);
   return new Map(
-    result.order.map((playerId, i) => [
-      playerId,
-      pointsFor(i + 1, dnf.has(playerId), config),
-    ]),
+    result.order.map((playerId, i) => [playerId, pointsFor(i + 1, config)]),
   );
 }
 
@@ -75,9 +68,9 @@ export function computeStandings(
   // produce a number; this produces the same number honestly.
   //
   // Note what it deliberately does NOT do: a member with no entry scores
-  // *nothing*, not dnfPoints. Absent is not retired. That is invisible while
-  // dnfPoints is 0 and stops being invisible the first time someone argues a
-  // DNF should be worth a point.
+  // *nothing*. **Absent is not retired** — a driver who blew up on lap one was
+  // there and is placed last, which is worth whatever last is worth; a driver
+  // who stayed home was not there at all and scores zero.
   for (const playerId of members ?? []) table.set(playerId, emptyRow(playerId));
 
   const relevant = races
@@ -95,7 +88,9 @@ export function computeStandings(
       // change a past result.
       const row = table.get(playerId) ?? emptyRow(playerId);
 
-      row.points += pointsFor(position, retired, config);
+      // Scored on placing whether or not the car finished — the order already
+      // says who broke and when.
+      row.points += pointsFor(position, config);
       row.races += 1;
       if (retired) {
         row.dnfs += 1;

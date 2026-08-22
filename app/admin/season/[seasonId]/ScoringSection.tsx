@@ -21,14 +21,12 @@ export default function ScoringSection({ seasonId }: { seasonId: string }) {
   // and it stops an incoming write yanking a half-typed value away.
   const [points, setPoints] = useState<string | null>(null);
   const [beyond, setBeyond] = useState<string | null>(null);
-  const [dnf, setDnf] = useState<string | null>(null);
 
   if (!season) return null;
 
   const config = season.scoringConfig;
   const pointsValue = points ?? config.positionPoints.join(", ");
   const beyondValue = beyond ?? String(config.pointsBeyondTable);
-  const dnfValue = dnf ?? String(config.dnfPoints);
 
   function parseScoring(): ScoringConfig {
     const positionPoints = pointsValue
@@ -44,7 +42,6 @@ export default function ScoringSection({ seasonId }: { seasonId: string }) {
     return {
       positionPoints,
       pointsBeyondTable: Number(beyondValue),
-      dnfPoints: Number(dnfValue),
     };
   }
 
@@ -59,7 +56,6 @@ export default function ScoringSection({ seasonId }: { seasonId: string }) {
       );
       setPoints(null);
       setBeyond(null);
-      setDnf(null);
       setStatus("Scoring saved");
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
@@ -85,30 +81,25 @@ export default function ScoringSection({ seasonId }: { seasonId: string }) {
         />
       </Field>
 
-      <div className="flex gap-4">
-        <Field label="Beyond the table">
-          <input
-            inputMode="numeric"
-            value={beyondValue}
-            onChange={(e) => setBeyond(e.target.value)}
-            className="w-full rounded border border-neutral-700 bg-neutral-900 p-3"
-          />
-        </Field>
-        <Field label="DNF">
-          <input
-            inputMode="numeric"
-            value={dnfValue}
-            onChange={(e) => setDnf(e.target.value)}
-            className="w-full rounded border border-neutral-700 bg-neutral-900 p-3"
-          />
-        </Field>
-      </div>
+      <Field label="Beyond the table">
+        <input
+          inputMode="numeric"
+          value={beyondValue}
+          onChange={(e) => setBeyond(e.target.value)}
+          className="w-full rounded border border-neutral-700 bg-neutral-900 p-3"
+        />
+      </Field>
 
-      {/* Said out loud because it is the rule most likely to be mistaken for a
-          bug: absent is not retired. */}
+      {/* Both said out loud, because both are rules that otherwise read as
+          bugs: a retirement is scored, an absence is not. */}
       <p className="text-xs text-neutral-500">
-        A driver who missed a race scores nothing at all — which is not the same
-        as the DNF value above.
+        There is no separate DNF score. A car that retires is placed by when it
+        went out — first one out finishes last — so its position already says
+        what happened, and it scores whatever that position is worth.
+      </p>
+      <p className="text-xs text-neutral-500">
+        A driver who missed the race entirely is a different thing, and scores
+        nothing at all.
       </p>
 
       <button

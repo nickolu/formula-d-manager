@@ -155,14 +155,21 @@ So `addSeasonMember` fans out only over races that are **`scheduled` or
 `live`** — a bounded loop (usually one race, often none), each one a normal
 `joinRace` appending its own `playerJoined` event. Completed races: no write.
 
-### 2. A missed race is not a DNF
+### 2. A missed race is not a retirement
 
 Related, and easy to get wrong later. A member with no entry in a race scores
-*nothing* — not `dnfPoints`. Today `dnfPoints` is 0 so the distinction is
-invisible; the moment someone argues for "a DNF is worth 1", it stops being
-invisible. Write it down now: **absent ≠ retired**, and the standings row shows
-`races` as *races entered*, with the season's race count in the header for
-contrast.
+*nothing*.
+
+**Superseded in part, and for the better:** this section was written when a DNF
+scored a flat `dnfPoints`, which was 0, so the distinction was invisible and the
+argument was hypothetical. `dnfPoints` is gone — a retirement is scored on its
+placing, because the finishing order already records who went out and when — so
+the two are now plainly different. A driver who blew up on lap one was there and
+is placed last, which is worth whatever last is worth. A driver who stayed home
+was not there at all.
+
+**Absent ≠ retired** still holds, and the standings row still shows `races` as
+*races entered*, with the season's race count in the header for contrast.
 
 ### 3. The season roster is not the grid
 

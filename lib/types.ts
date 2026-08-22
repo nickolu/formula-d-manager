@@ -18,8 +18,16 @@ export interface ScoringConfig {
   positionPoints: number[];
   /** Awarded to anyone finishing past the end of positionPoints. */
   pointsBeyondTable: number;
-  dnfPoints: number;
 }
+
+/**
+ * There is deliberately no `dnfPoints`. A retirement scores its placing like
+ * anyone else's — the finishing order already encodes who broke and when, so
+ * the first car out is placed last, the next above it, and so on. A separate
+ * DNF value would score that same fact a second time and let a flag override a
+ * placing. Seasons written before this carry a stray `dnfPoints` in Firestore;
+ * nothing reads it, and there is no migration, as usual.
+ */
 
 /** One colour a team can wear. Keys are stable ids, never reused for a different colour. */
 export interface TeamColor {

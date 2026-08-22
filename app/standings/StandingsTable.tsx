@@ -331,8 +331,8 @@ export default function StandingsTable({ seasonId }: { seasonId: string }) {
       <p className="mt-6 text-xs text-neutral-600">
         {season.name} · points {season.scoringConfig.positionPoints.join("-")}
         {", then "}
-        {season.scoringConfig.pointsBeyondTable} · DNF{" "}
-        {season.scoringConfig.dnfPoints}
+        {season.scoringConfig.pointsBeyondTable} · retirements score their
+        placing
         {teamsOn && ` · teams score by ${config.scoring}`}
       </p>
 

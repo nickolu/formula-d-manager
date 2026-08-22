@@ -31,10 +31,14 @@ usually one, often none. Each is a normal `joinRace` appending its own
 transaction: Firestore cannot query inside a transaction, so the race list is
 read first.
 
-**2. A missed race is not a DNF.** A member with no entry scores *nothing*, not
-`dnfPoints`. Invisible today at `dnfPoints: 0`; not invisible the first time
-someone argues a DNF is worth a point. The standings `races` column means
-*races entered*, with the season's race count in the header for contrast.
+**2. A missed race is not a retirement.** A member with no entry scores
+*nothing*. **Amended after this item shipped, on the user's call:** `dnfPoints`
+is gone entirely — a retirement is scored on its *placing*, because the
+finishing order already records who went out and when (first out is placed
+last). So the distinction is no longer subtle: a driver who blew up was there
+and is placed for it; a driver who stayed home was not. The standings `races`
+column means *races entered*, with the season's race count in the header for
+contrast.
 
 **3. The roster is not the grid.** Membership is "who is in this league". The
 grid is "who is at the table tonight, and in what order". Ken skipping a week
