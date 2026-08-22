@@ -105,6 +105,8 @@ function raceFacts(race: Race, nameOf: (id: PlayerId) => string): string {
   const when = race.scheduledAt?.toDate?.();
 
   return [
+    // Bare, with no "on" or "scheduled for": the badge beside it already says
+    // whether this date is a plan or a record.
     when ? formatDate(when) : null,
     race.location ? `at ${race.location}` : null,
     `${race.lapCount} ${race.lapCount === 1 ? "lap" : "laps"}`,
@@ -143,17 +145,17 @@ function PlayerRow({
             : "border-emerald-800 bg-emerald-950/30"
         }`}
       >
-        <span className="min-w-0">
+        <span className="min-w-0 flex-1">
           <span className="block truncate text-lg font-medium">{race.track}</span>
-          {/* Which night this was, and whose house — what someone scanning the
-              list is actually trying to tell two races apart by. */}
+          {/* Which night this was, whose house, and how it went — what someone
+              scanning the list is actually telling two race nights apart by.
+              Without it a race that has not started yet reads as nothing but
+              the word "scheduled". */}
           <span className="mt-0.5 block truncate text-sm text-neutral-500">
             {raceFacts(race, nameOf)}
           </span>
         </span>
-        <span className="shrink-0 text-sm text-neutral-500">
-          {race.status === "complete" ? "finished" : race.status}
-        </span>
+        <StateBadge status={race.status} />
       </Link>
     </li>
   );
