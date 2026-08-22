@@ -13,8 +13,13 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { app, db } from "./firebase";
 import { liveDoc } from "./race";
-import { computeStandings } from "./scoring";
-import { seasonDoc, seasonEventsCol, seasonsCol } from "./seasons";
+import { computeStandings, isScorable } from "./scoring";
+import {
+  seasonDoc,
+  seasonEventsCol,
+  seasonMembersCol,
+  seasonsCol,
+} from "./seasons";
 import type {
   LiveState,
   Participant,
@@ -24,6 +29,7 @@ import type {
   RaceEvent,
   Season,
   SeasonEvent,
+  SeasonMember,
 } from "./types";
 
 /**
@@ -223,6 +229,29 @@ export function useSeasons() {
 }
 
 /**
+ * Who is in the league this season.
+ *
+ * This is NOT the grid. It answers "who is in this league", while the live
+ * doc's positionOrder answers "who is at the table tonight, and in what order".
+ * Someone missing a game night stays a member — which is why they still appear
+ * in standings, on zero, rather than being written into a race they did not run.
+ */
+export function useSeasonMembers(seasonId: string) {
+  const [members, setMembers] = useState<SeasonMember[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(seasonMembersCol(seasonId), (snap) => {
+      setMembers(snap.docs.map((d) => d.data() as SeasonMember));
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, [seasonId]);
+
+  return { members, loading };
+}
+
+/**
  * The season's event log, newest first, shaped exactly like useRaceEvents.
  *
  * Nothing renders this yet, on purpose: the log ships before its view because
@@ -252,13 +281,28 @@ export function useSeasonEvents(seasonId: string, max = 300) {
 export function useStandings(seasonId: string) {
   const races = useRaces(seasonId);
   const { season, loading } = useSeason(seasonId);
+  const { members } = useSeasonMembers(seasonId);
+
+  // The roster is an input to scoring, not a thing written into races: a member
+  // who missed a night appears on zero because computeStandings seeded them,
+  // and the race's result still records exactly who was on the grid.
+  const memberIds = useMemo(() => members.map((m) => m.playerId), [members]);
 
   const standings = useMemo(
-    () => (season ? computeStandings(races, season.scoringConfig, seasonId) : []),
-    [races, season, seasonId],
+    () =>
+      season
+        ? computeStandings(races, season.scoringConfig, seasonId, memberIds)
+        : [],
+    [races, season, seasonId, memberIds],
   );
 
-  return { standings, season, loading };
+  // How many races have actually been run. The standings row's `races` column
+  // means *races entered*, and a 0 against a season with seven races run reads
+  // very differently from a 0 in a season that has not started — so the view
+  // gets both numbers, and "absent" never has to be inferred.
+  const racesRun = useMemo(() => races.filter(isScorable).length, [races]);
+
+  return { standings, season, loading, racesRun };
 }
 
 /**

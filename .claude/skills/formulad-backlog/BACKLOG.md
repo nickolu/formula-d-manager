@@ -25,7 +25,7 @@ fields exist.
 | 11 | 10.5 | Join a race | **done** | 10 |
 | 12 | 11 | Per-player car status | **done** | 6, 10 |
 | 13 | 13 | Seasons as a real entity | **done** | — |
-| 14 | 14 | The season roster | `todo` | 13 |
+| 14 | 14 | The season roster | **done** | 13 |
 | 15 | 15 | Player-side season scoping + season claim | `todo` | 13, 14 |
 | 16 | 16 | Backfill and amend a race | `todo` | 13, 14 |
 | 17 | 17 | Teams, admin side | `todo` | 13, 14 |

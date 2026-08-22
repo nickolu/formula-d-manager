@@ -6,14 +6,15 @@ import { useState } from "react";
 import Nav from "@/app/Nav";
 import NewRaceForm from "@/app/NewRaceForm";
 import RaceList from "@/app/RaceList";
+import RosterSection from "./RosterSection";
 import { useSeason } from "@/lib/hooks";
 import { deleteSeason, updateSeason } from "@/lib/seasons";
 import type { ScoringConfig } from "@/lib/types";
 
 /**
- * One season, everything about it in one page: its races, its scoring, and the
- * settings that seal or remove it. Roster and Teams are items 14 and 17 and
- * land here as further sections.
+ * One season, everything about it in one page: its races, its roster, its
+ * scoring, and the settings that seal or remove it. Teams is item 17 and lands
+ * here as a further section.
  *
  * Every change goes through lib/seasons.ts, which writes the document and
  * appends a season event in one transaction. Nothing here writes a document
@@ -110,6 +111,8 @@ export default function SeasonAdminView({ seasonId }: { seasonId: string }) {
         <NewRaceForm seasonId={seasonId} />
         <RaceList variant="admin" seasonId={seasonId} />
       </section>
+
+      <RosterSection seasonId={seasonId} />
 
       <section className="flex flex-col gap-3">
         <h2 className="text-xs uppercase tracking-widest text-neutral-500">

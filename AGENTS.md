@@ -225,6 +225,57 @@ record the move happened. Unrecoverable after the fact, trivial to write now.
 — so "who said so" reads the same whichever log you are in, and one shape means
 one set of rules.
 
+**The season owns the roster; the race owns the grid.** `seasons/{id}/members`
+answers "who is in this league"; the live doc's `positionOrder` answers "who is
+at the table tonight, and in what order". Someone missing a game night is not
+leaving the season. A subcollection rather than an array on the season document,
+because a member carries fields and item 17's transactions have to read *one*
+member without reading the whole league. `players/{id}` stays global and shrinks
+to what it should always have been: the human's name, stable across seasons.
+
+**"Added to all races" is the trap in this feature.** It reads as a fan-out over
+every race in the season. It must not be one — **a finished race is never
+written to.** Adding a member to a sealed `result.order` would mutate the
+scoring cache of a race they did not run so that standings could read a zero
+back out of it: a lie in the log to produce a number. The `+0` falls out for
+free from the roster being an *input to* `computeStandings`, which seeds a zero
+row per member before scoring anything. So `addSeasonMember` fans out over
+`scheduled` and `live` races only — usually one, often none — and each is an
+ordinary `joinRace` appending its own `playerJoined` event. It is a loop of
+transactions rather than one transaction, because the race list has to be
+queried first and the web SDK cannot query inside a transaction.
+
+**A missed race is not a DNF.** A member with no entry scores *nothing*, not
+`dnfPoints`. Invisible today at `dnfPoints: 0`, and not invisible the first time
+someone argues a DNF is worth a point. The standings `races` column means
+*races entered*, which is why the view prints how many races the season has run
+beside it: 0 of 7 and 0 of 0 are different facts.
+
+`computeStandings` still scores everyone it finds in a result, **not** only the
+current members — someone who ran three races and later left the league still
+scored those points, and filtering them out would silently rewrite a past
+result.
+
+`removeSeasonMember` checks every reason it could fail *before* writing
+anything, and **refuses a member who is on a live grid.** `removePlayer` refuses
+there anyway; the point is that failing half way through a fan-out would leave
+the member dropped from two races and not a third. Retiring the car is the
+in-race answer, and it is reversible.
+
+**The new-race form is a checklist, not a textarea.** It draws the grid from the
+roster, unchecks absentees, and drags for order — and a name typed into it goes
+onto the roster too, because a new player turning up is normal and making the
+commissioner visit two screens for it is not. The displayed order is *derived*
+(dragged order ∩ roster, then whatever the roster has that it doesn't) rather
+than state synchronized from a listener, so a member added on another phone
+appears without a re-render fight over who owns the list.
+
+`scripts/backfill-season-members.ts` writes member documents **directly** rather
+than through `addSeasonMember`, and appends no season event. The fan-out would
+append a `playerJoined` claiming they arrived today, when they were already on
+those grids: a migration records that the roster caught up with history, not
+that history happened again.
+
 **Firestore rules do not inherit into subcollections.** `match /seasons/{id}`
 covers the season document and nothing under it, and a missing nested match is
 a silent permission denial at the table, not a build error. So `events`
@@ -524,8 +575,12 @@ nudging, per-car laps, manual correction.
   - **Done:** seasons as a real entity — created, renamed, scored and archived
     from `/admin`, with a season event log, the subcollection rules, and the
     `seasonId`/`scheduledAt` index. `createRace` verifies its season.
-  - **Next:** the season roster (`seasons/{id}/members`), then player-side
-    season scoping, backfill/amend, and teams — the arc laid out in
+  - **Done:** the season roster — members own the league, races draw their grid
+    from it, and standings seed a zero row per member so a missed night costs
+    nothing and rewrites no sealed race. `npm run backfill-season-members`
+    builds the roster from races already run.
+  - **Next:** player-side season scoping (`/season/:id` and the header
+    switcher), then backfill/amend, then teams — the arc laid out in
     `docs/seasons-and-teams.md`.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
     rules tighten — right now any signed-in caller can write anything, which

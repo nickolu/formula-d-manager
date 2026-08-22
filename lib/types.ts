@@ -497,6 +497,52 @@ export type RaceEvent =
   | CorrectionEvent;
 
 /**
+ * One racer in a league, for one season.
+ *
+ * A subcollection under the season rather than an array on the season document:
+ * a member carries fields, and item 17's transactions have to read *one* member
+ * without reading the whole league.
+ *
+ * This is NOT the grid. Membership answers "who is in this league"; the grid
+ * answers "who is at the table tonight, and in what order". Someone missing a
+ * game night is not leaving the season, so a member with no entry in a race
+ * scores *nothing* — which is distinct from a DNF, and stays distinct the first
+ * time somebody argues that a DNF should be worth a point.
+ *
+ * `players/{id}` stays global and is what it should always have been: the
+ * human's name, stable across seasons.
+ */
+export interface SeasonMember {
+  playerId: PlayerId;
+  joinedAt: Timestamp;
+  /**
+   * Mirror of `teams/{teamId}.members` — the *exclusivity* authority, so "am I
+   * already on a team" is one field a transaction can read. Item 17 populates
+   * it; the type is declared now so there is one shape to write against.
+   */
+  teamId?: string | null;
+  /**
+   * The uid that claims this racer for the whole season, so a phone claims once
+   * instead of every game night. `participants/{id}.claimedBy` stays the
+   * in-race truth. Item 15 populates it.
+   */
+  claimedBy?: string | null;
+}
+
+/** Someone joined the league for this season. */
+export interface MemberAddedEvent extends BaseEvent {
+  type: "memberAdded";
+  playerId: PlayerId;
+  name: string;
+}
+
+/** Someone left the league. Their finished races keep their results. */
+export interface MemberRemovedEvent extends BaseEvent {
+  type: "memberRemoved";
+  playerId: PlayerId;
+}
+
+/**
  * A patch of season configuration, one level deep. Same shape as the argument
  * to `updateSeason`, so the event carries exactly what the caller asked for.
  */
@@ -534,4 +580,8 @@ export interface SeasonSettingsChangedEvent extends BaseEvent {
  * Items 14 and 17 extend this union with their own variants. There is
  * deliberately no history view yet.
  */
-export type SeasonEvent = SeasonCreatedEvent | SeasonSettingsChangedEvent;
+export type SeasonEvent =
+  | SeasonCreatedEvent
+  | SeasonSettingsChangedEvent
+  | MemberAddedEvent
+  | MemberRemovedEvent;

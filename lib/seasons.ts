@@ -14,8 +14,12 @@ import {
   type Transaction,
 } from "firebase/firestore";
 import { db } from "./firebase";
+import { joinRace, participantDoc, removePlayer } from "./race";
+import { playerId as slugFor } from "./setup";
 import type {
   EventSource,
+  PlayerId,
+  Race,
   ScoringConfig,
   Season,
   SeasonSettingsPatchShape,
@@ -25,6 +29,10 @@ export const seasonsCol = () => collection(db, "seasons");
 export const seasonDoc = (seasonId: string) => doc(db, "seasons", seasonId);
 export const seasonEventsCol = (seasonId: string) =>
   collection(db, "seasons", seasonId, "events");
+export const seasonMembersCol = (seasonId: string) =>
+  collection(db, "seasons", seasonId, "members");
+export const seasonMemberDoc = (seasonId: string, playerId: PlayerId) =>
+  doc(db, "seasons", seasonId, "members", playerId);
 
 /**
  * Every race created before seasons existed carries seasonId "default", and
@@ -169,6 +177,136 @@ export async function updateSeason(
       type: "seasonSettingsChanged",
       patch: applied,
     });
+  });
+}
+
+/**
+ * The season's races that a roster change is allowed to touch: everything that
+ * has not been sealed. Read outside any transaction, because the web SDK cannot
+ * run a collection query inside one.
+ */
+async function unsealedRaces(seasonId: string): Promise<Race[]> {
+  const snap = await getDocs(
+    query(
+      collection(db, "races"),
+      where("seasonId", "==", seasonId),
+      where("status", "in", ["scheduled", "live"]),
+    ),
+  );
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Race);
+}
+
+/**
+ * Adds a racer to the league, and to every race in it that has not been sealed.
+ *
+ * "A player added to a season is added to all races in that season" reads as a
+ * fan-out over every race. It must not be one. **A finished race is never
+ * written to.** Adding someone to a sealed `result.order` would mutate the
+ * scoring cache of a race they did not run so that standings could read a zero
+ * back out of it — a lie in the log to produce a number.
+ *
+ * The +0 falls out for free from the roster being an *input* to
+ * `computeStandings`: it seeds a zero row per member, so a player who joined in
+ * week five shows 0 points and 0 races entered while `result` still records
+ * exactly who was on the grid.
+ *
+ * So the fan-out covers `scheduled` and `live` races only — usually one, often
+ * none — and each is an ordinary `joinRace` appending its own `playerJoined`
+ * event to that race's log. A loop of transactions rather than one transaction,
+ * because the race list has to be queried first.
+ */
+export async function addSeasonMember(
+  seasonId: string,
+  name: string,
+  who: Actor,
+): Promise<PlayerId> {
+  const trimmed = name.trim();
+  // Ids are name slugs so the same human is stable across races and seasons —
+  // which also means a name of only punctuation slugs to nothing.
+  const playerId = slugFor(trimmed);
+  if (!trimmed || !playerId) throw new Error("Enter a name");
+
+  await runTransaction(db, async (tx) => {
+    const season = await tx.get(seasonDoc(seasonId));
+    if (!season.exists()) throw new Error(`No season ${seasonId}`);
+    const existing = await tx.get(seasonMemberDoc(seasonId, playerId));
+    if (existing.exists()) throw new Error(`${trimmed} is already in this season`);
+
+    // merge so a returning player's record isn't clobbered, matching createRace.
+    tx.set(
+      doc(db, "players", playerId),
+      { name: trimmed, displayName: trimmed, active: true },
+      { merge: true },
+    );
+    tx.set(seasonMemberDoc(seasonId, playerId), {
+      playerId,
+      joinedAt: serverTimestamp(),
+    });
+    appendSeasonEvent(tx, seasonId, who, {
+      type: "memberAdded",
+      playerId,
+      name: trimmed,
+    });
+  });
+
+  for (const race of await unsealedRaces(seasonId)) {
+    // Already on that grid is the ordinary case when a race was created from
+    // the roster, and joinRace refuses a duplicate. The pre-check keeps the
+    // common path quiet; joinRace's own transaction is still the authority.
+    if ((await getDoc(participantDoc(race.id, playerId))).exists()) continue;
+    await joinRace(race.id, trimmed, null, who);
+  }
+
+  return playerId;
+}
+
+/**
+ * Removes a racer from the league, and from the season's `scheduled` races.
+ *
+ * **Refuses outright if they are on a live grid.** `removePlayer` refuses there
+ * anyway, but failing half way through a fan-out is worse than failing up
+ * front: the season would be left having dropped them from two races and not a
+ * third. Retiring the car is the in-race answer, and it is reversible.
+ *
+ * Finished races are untouched — a member who leaves keeps the results of the
+ * races they actually ran.
+ */
+export async function removeSeasonMember(
+  seasonId: string,
+  playerId: PlayerId,
+  who: Actor,
+) {
+  const races = await unsealedRaces(seasonId);
+
+  // Every reason this could fail is checked before anything is written.
+  const scheduled: string[] = [];
+  for (const race of races) {
+    const live = await getDoc(doc(db, "races", race.id, "state", "live"));
+    const grid = (live.data()?.positionOrder ?? []) as PlayerId[];
+    if (!grid.includes(playerId)) continue;
+    if (race.status !== "scheduled") {
+      throw new Error(
+        `${playerId} is racing in ${race.track}. Retire the car instead — that is reversible.`,
+      );
+    }
+    if (grid.length <= 1) {
+      throw new Error(
+        `${race.track} would have no cars left. Delete that race first.`,
+      );
+    }
+    scheduled.push(race.id);
+  }
+
+  for (const raceId of scheduled) {
+    await removePlayer(raceId, playerId, who);
+  }
+
+  await runTransaction(db, async (tx) => {
+    const member = await tx.get(seasonMemberDoc(seasonId, playerId));
+    if (!member.exists()) throw new Error(`${playerId} is not in this season`);
+
+    tx.delete(seasonMemberDoc(seasonId, playerId));
+    appendSeasonEvent(tx, seasonId, who, { type: "memberRemoved", playerId });
   });
 }
 

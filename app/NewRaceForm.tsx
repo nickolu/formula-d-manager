@@ -1,23 +1,69 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import AddMember from "@/app/AddMember";
+import ReorderableList from "@/app/ReorderableList";
+import { usePlayers, useSeasonMembers } from "@/lib/hooks";
 import { createRace } from "@/lib/setup";
+import type { PlayerId } from "@/lib/types";
 
 /**
- * Scoped to a season, because a race must belong to one — createRace verifies
- * the id rather than defaulting it. The form lives on the season's admin page
- * for exactly that reason: there is no such thing as a race with no season to
- * put it in.
+ * A race is drawn from the season roster, not typed into a textarea.
+ *
+ * The roster answers "who is in this league"; this form answers "who is at the
+ * table tonight, and in what order". So it is a checklist you uncheck absentees
+ * from, plus a drag handle for grid order — Ken skipping a week is one tap and
+ * does not touch his membership.
+ *
+ * Scoped to a season because a race must belong to one: createRace verifies the
+ * id rather than defaulting it.
  */
 export default function NewRaceForm({ seasonId }: { seasonId: string }) {
   const router = useRouter();
+  const { members, loading } = useSeasonMembers(seasonId);
+  const players = usePlayers();
+
   const [track, setTrack] = useState("");
   const [lapCount, setLapCount] = useState(2);
   const [turnSeconds, setTurnSeconds] = useState(90);
-  const [names, setNames] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Grid order and absentees, held apart from the roster itself. `order` only
+  // records what has been dragged; anyone the roster gains afterwards falls in
+  // at the bottom, and `absent` is the exception list so a new member arrives
+  // checked rather than silently left off.
+  const [order, setOrder] = useState<PlayerId[]>([]);
+  const [absent, setAbsent] = useState<Set<PlayerId>>(new Set());
+
+  const rosterIds = useMemo(
+    () => members.map((m) => m.playerId).sort(),
+    [members],
+  );
+
+  // Derived, not synchronized: the displayed order is the dragged order
+  // intersected with the roster, plus whatever the roster has that it doesn't.
+  // No effect, so a member added on another phone appears without a re-render
+  // fight over who owns the list.
+  const grid = useMemo(() => {
+    const roster = new Set(rosterIds);
+    const placed = order.filter((id) => roster.has(id));
+    const seen = new Set(placed);
+    return [...placed, ...rosterIds.filter((id) => !seen.has(id))];
+  }, [order, rosterIds]);
+
+  const racing = grid.filter((id) => !absent.has(id));
+  const nameOf = (id: PlayerId) => players.get(id)?.displayName ?? id;
+
+  function toggle(id: PlayerId) {
+    setAbsent((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -28,7 +74,9 @@ export default function NewRaceForm({ seasonId }: { seasonId: string }) {
         track: track.trim() || "Untitled track",
         lapCount,
         turnSeconds,
-        playerNames: names.split("\n"),
+        // Names rather than ids, because ids are name slugs — createRace slugs
+        // them straight back to the same players.
+        playerNames: racing.map(nameOf),
         seasonId,
       });
       router.push(`/race/${raceId}/player`);
@@ -39,8 +87,8 @@ export default function NewRaceForm({ seasonId }: { seasonId: string }) {
   }
 
   return (
-    <form onSubmit={submit} className="mt-8 flex flex-col gap-4">
-      <h2 className="text-xl font-medium">New race</h2>
+    <form onSubmit={submit} className="mt-6 flex flex-col gap-4">
+      <h3 className="text-lg font-medium">New race</h3>
 
       <label className="flex flex-col gap-1">
         <span className="text-sm text-neutral-500">Track</span>
@@ -59,7 +107,7 @@ export default function NewRaceForm({ seasonId }: { seasonId: string }) {
             min={1}
             value={lapCount}
             onChange={(e) => setLapCount(Number(e.target.value))}
-            className="rounded border border-neutral-700 bg-transparent p-2"
+            className="w-full rounded border border-neutral-700 bg-transparent p-2"
           />
         </label>
         <label className="flex flex-1 flex-col gap-1">
@@ -69,30 +117,71 @@ export default function NewRaceForm({ seasonId }: { seasonId: string }) {
             min={10}
             value={turnSeconds}
             onChange={(e) => setTurnSeconds(Number(e.target.value))}
-            className="rounded border border-neutral-700 bg-transparent p-2"
+            className="w-full rounded border border-neutral-700 bg-transparent p-2"
           />
         </label>
       </div>
 
-      <label className="flex flex-col gap-1">
+      <div className="flex flex-col gap-2">
         <span className="text-sm text-neutral-500">
-          Players, one per line, in starting grid order
+          Who is racing, front of the grid first
         </span>
-        <textarea
-          value={names}
-          onChange={(e) => setNames(e.target.value)}
-          rows={7}
-          placeholder={"Nick\nJames\nKen\nSarah"}
-          className="rounded border border-neutral-700 bg-transparent p-2 font-mono"
-        />
-      </label>
+
+        {loading ? (
+          <p className="text-neutral-500">Loading the roster…</p>
+        ) : grid.length === 0 ? (
+          <p className="rounded border border-neutral-800 p-4 text-sm text-neutral-400">
+            Nobody in the league yet. Add someone below and they will be here
+            next time too — the roster belongs to the season, not to one race.
+          </p>
+        ) : (
+          <ReorderableList
+            items={grid}
+            disabled={busy}
+            onReorder={setOrder}
+            renderRow={(id) => {
+              const out = absent.has(id);
+              return (
+                <button
+                  type="button"
+                  onClick={() => toggle(id)}
+                  aria-pressed={!out}
+                  className={`flex w-full items-center gap-3 rounded border p-3 text-left ${
+                    out
+                      ? "border-neutral-900 text-neutral-600"
+                      : "border-neutral-800"
+                  }`}
+                >
+                  <span
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border text-xs ${
+                      out
+                        ? "border-neutral-800 text-transparent"
+                        : "border-emerald-600 bg-emerald-600 text-white"
+                    }`}
+                  >
+                    ✓
+                  </span>
+                  {/* The number is the grid slot, so absentees carry none —
+                      counting them would make the third row say "4". */}
+                  <span className="w-5 text-neutral-500">
+                    {out ? "—" : racing.indexOf(id) + 1}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{nameOf(id)}</span>
+                </button>
+              );
+            }}
+          />
+        )}
+
+        <AddMember seasonId={seasonId} label="Someone new at the table" />
+      </div>
 
       <button
         type="submit"
-        disabled={busy}
+        disabled={busy || racing.length === 0}
         className="rounded bg-emerald-600 py-3 text-lg font-medium disabled:opacity-50"
       >
-        {busy ? "Creating…" : "Start race"}
+        {busy ? "Creating…" : `Create race (${racing.length})`}
       </button>
 
       {error && <p className="text-red-500">{error}</p>}

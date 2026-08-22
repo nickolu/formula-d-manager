@@ -1,6 +1,5 @@
 import { collection, doc, getDoc, serverTimestamp, writeBatch } from "firebase/firestore";
 import { db } from "./firebase";
-import { seasonDoc } from "./seasons";
 import type { CarStatusProperty, GearRange, Race } from "./types";
 
 /** Player ids are slugs of their name so the same human is stable across races. */
@@ -91,7 +90,9 @@ export async function createRace(input: NewRaceInput): Promise<string> {
   // orphaned race is worse than a slower create. Standings are scoped by
   // seasonId, so a race pointing at nothing scores into nothing.
   if (!input.seasonId) throw new Error("A race needs a season");
-  if (!(await getDoc(seasonDoc(input.seasonId))).exists()) {
+  // The reference is built here rather than imported from ./seasons, which
+  // imports this module for the id slug — a cycle for one `doc()` call.
+  if (!(await getDoc(doc(db, "seasons", input.seasonId))).exists()) {
     throw new Error(`No season ${input.seasonId}`);
   }
 

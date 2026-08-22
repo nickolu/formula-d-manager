@@ -47,11 +47,14 @@ import {
 } from "../lib/race";
 import { computeStandings, pointsFor } from "../lib/scoring";
 import {
+  addSeasonMember,
   createSeason,
   DEFAULT_SCORING,
   deleteSeason,
+  removeSeasonMember,
   seasonDoc,
   seasonEventsCol,
+  seasonMemberDoc,
   updateSeason,
 } from "../lib/seasons";
 import { createRace, DEFAULT_CAR_STATUS_SPEC } from "../lib/setup";
@@ -807,6 +810,119 @@ async function main() {
   );
 
   unsubscribe();
+
+  console.log("\nthe season roster — the league is not the grid:");
+  const rosterRaceId = await createRace({
+    track: "SMOKE-TEST roster",
+    lapCount: 1,
+    turnSeconds: TURN_SECONDS,
+    playerNames: ["Alpha", "Bravo"],
+    seasonId,
+  });
+
+  const echo = await addSeasonMember(seasonId, "Echo", { source: "manual" });
+  check(
+    "the member document is written",
+    (await getDoc(seasonMemberDoc(seasonId, echo))).exists(),
+  );
+  check(
+    "adding a member is logged",
+    (await seasonEventTypes(seasonId)).includes("memberAdded"),
+  );
+  check(
+    "they join the race that has not started",
+    (
+      (await getDoc(liveDoc(rosterRaceId))).data() as LiveState
+    ).positionOrder.includes(echo),
+  );
+  // The whole point of item 14: the sealed race is never written to. Adding
+  // them to result.order would mutate the scoring cache of a race they did not
+  // run so the standings could read a zero back out of it.
+  const sealed = (await getDoc(raceDoc(raceId))).data() as Race;
+  check(
+    "...and the finished race is left alone",
+    !sealed.result?.order.includes(echo),
+    sealed.result?.order.join(","),
+  );
+  await rejects(
+    () => addSeasonMember(seasonId, "Echo", { source: "manual" }),
+    "adding the same member twice is refused",
+  );
+  await rejects(
+    () => addSeasonMember(seasonId, "   ", { source: "manual" }),
+    "a member with no name is refused",
+  );
+
+  const seeded = computeStandings([finished], DEFAULT_SCORING, seasonId, [
+    "alpha",
+    "bravo",
+    "charlie",
+    echo,
+  ]);
+  const echoRow = seeded.find((r) => r.playerId === echo);
+  check(
+    "a member who missed the race still has a row",
+    echoRow?.points === 0 && echoRow?.races === 0,
+    `${echoRow?.points}pts/${echoRow?.races} races`,
+  );
+  check("the roster does not disturb the finishers", seeded[0]?.playerId === "charlie");
+  // Invisible while dnfPoints is 0, which is exactly why it is checked against
+  // a config where it isn't: absent is not retired.
+  const contrast = computeStandings(
+    [finished],
+    { ...DEFAULT_SCORING, dnfPoints: 1 },
+    seasonId,
+    [echo],
+  );
+  check(
+    "a missed race scores nothing, a DNF scores dnfPoints",
+    contrast.find((r) => r.playerId === echo)?.points === 0 &&
+      contrast.find((r) => r.playerId === "bravo")?.points === 1,
+  );
+
+  await removeSeasonMember(seasonId, echo, { source: "manual" });
+  check(
+    "removing a member takes them off the unstarted grid",
+    !(
+      (await getDoc(liveDoc(rosterRaceId))).data() as LiveState
+    ).positionOrder.includes(echo),
+  );
+  check(
+    "the member document goes with them",
+    !(await getDoc(seasonMemberDoc(seasonId, echo))).exists(),
+  );
+  check(
+    "leaving is logged",
+    (await seasonEventTypes(seasonId)).includes("memberRemoved"),
+  );
+  await rejects(
+    () => removeSeasonMember(seasonId, echo, { source: "manual" }),
+    "removing someone who is not in the season is refused",
+  );
+
+  await startRace(rosterRaceId, { source: "manual" });
+  const foxtrot = await addSeasonMember(seasonId, "Foxtrot", { source: "manual" });
+  const joinedLive = (await getDoc(liveDoc(rosterRaceId))).data() as LiveState;
+  check(
+    "a member joins a live race in standings only, racing from next round",
+    joinedLive.positionOrder.includes(foxtrot) &&
+      !joinedLive.roundOrder.includes(foxtrot),
+    joinedLive.roundOrder.join(","),
+  );
+  await rejects(
+    () => removeSeasonMember(seasonId, foxtrot, { source: "manual" }),
+    "removing a member who is racing right now is refused",
+  );
+
+  await finishRace(rosterRaceId, ["alpha", "bravo", foxtrot], [], {
+    source: "manual",
+  });
+  await deleteRace(rosterRaceId);
+  await removeSeasonMember(seasonId, foxtrot, { source: "manual" });
+  check(
+    "...and allowed again once no race is running",
+    !(await getDoc(seasonMemberDoc(seasonId, foxtrot))).exists(),
+  );
 
   console.log("\ndeleting the race — which is also the cleanup:");
   await deleteRace(raceId);

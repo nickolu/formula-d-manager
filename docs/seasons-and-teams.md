@@ -1,7 +1,7 @@
 # Seasons and teams — the model
 
-Status: **step 1 shipped** (seasons as a real entity — item 13). Steps 2–7 are
-still proposal. Written before code so the arguments happen here rather than in
+Status: **steps 1–2 shipped** (seasons as a real entity, and the season
+roster — items 13 and 14). Steps 3–7 are still proposal. Written before code so the arguments happen here rather than in
 a diff.
 
 ## What this changes about the one idea
@@ -509,9 +509,10 @@ Each step leaves the app working.
    `seasonId`/`scheduledAt` index. `/admin` lists seasons, `/admin/season/:id`
    carries the races and scoring, and `createRace` verifies its `seasonId`
    instead of defaulting it.
-2. **Season roster** — members subcollection, `addSeasonMember` with its
-   fan-out, `createRace` pre-filled from the roster, backfill script. Standings
-   take `members` and seed zero rows.
+2. ~~**Season roster**~~ — **done.** Members subcollection, `addSeasonMember`
+   with its fan-out over unsealed races only, `createRace` pre-filled from the
+   roster (the textarea is gone), `backfill-season-members`, and
+   `computeStandings` taking `members` to seed zero rows.
 3. **Player-side season scoping** — `/season/:id`, the switcher on `/`,
    `/standings` redirect. Season-level claim seeds the race claim.
 4. **Backfill and amend** — `backfillRace`, `amendRaceResult`, the admin forms.

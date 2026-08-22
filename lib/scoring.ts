@@ -61,8 +61,21 @@ export function computeStandings(
   races: Race[],
   config: ScoringConfig,
   seasonId?: string,
+  members?: PlayerId[],
 ): SeasonStanding[] {
   const table = new Map<PlayerId, SeasonStanding>();
+
+  // Seeding a zero row per season member is the whole of the "+0 for a race you
+  // missed" requirement. The alternative — writing the member into a finished
+  // race's result.order so the standings can read a zero back out — would
+  // mutate the scoring cache of a race they did not run. A lie in the log to
+  // produce a number; this produces the same number honestly.
+  //
+  // Note what it deliberately does NOT do: a member with no entry scores
+  // *nothing*, not dnfPoints. Absent is not retired. That is invisible while
+  // dnfPoints is 0 and stops being invisible the first time someone argues a
+  // DNF should be worth a point.
+  for (const playerId of members ?? []) table.set(playerId, emptyRow(playerId));
 
   const relevant = races
     .filter(isScorable)
@@ -74,16 +87,10 @@ export function computeStandings(
     race.result.order.forEach((playerId, i) => {
       const position = i + 1;
       const retired = dnf.has(playerId);
-      const row = table.get(playerId) ?? {
-        playerId,
-        points: 0,
-        races: 0,
-        wins: 0,
-        podiums: 0,
-        dnfs: 0,
-        bestFinish: null,
-        finishCounts: [],
-      };
+      // Not filtered to `members`: someone who ran a race and later left the
+      // league still scored those points, and dropping them would silently
+      // change a past result.
+      const row = table.get(playerId) ?? emptyRow(playerId);
 
       row.points += pointsFor(position, retired, config);
       row.races += 1;
@@ -106,6 +113,20 @@ export function computeStandings(
   }
 
   return [...table.values()].sort(compareStandings);
+}
+
+/** A driver who has entered nothing yet — 0 points, 0 races, no best finish. */
+function emptyRow(playerId: PlayerId): SeasonStanding {
+  return {
+    playerId,
+    points: 0,
+    races: 0,
+    wins: 0,
+    podiums: 0,
+    dnfs: 0,
+    bestFinish: null,
+    finishCounts: [],
+  };
 }
 
 /** Points, then countback through finishing positions, then name for stability. */

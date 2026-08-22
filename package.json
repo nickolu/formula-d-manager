@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "smoke": "tsx --env-file=.env.local scripts/smoke.ts",
-    "seed-season": "tsx --env-file=.env.local scripts/seed-season.ts"
+    "seed-season": "tsx --env-file=.env.local scripts/seed-season.ts",
+    "backfill-season-members": "tsx --env-file=.env.local scripts/backfill-season-members.ts"
   },
   "dependencies": {
     "firebase": "^12.16.0",
