@@ -23,8 +23,8 @@ export default function AddMember({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit() {
+    if (!name.trim()) return;
     setBusy(true);
     setError(null);
     try {
@@ -37,17 +37,29 @@ export default function AddMember({
     }
   }
 
+  // Deliberately not a <form>. This renders inside NewRaceForm's form, and a
+  // form cannot contain another one — the browser reparents it and React fails
+  // hydration. Enter is wired up by hand instead, which is the only thing the
+  // form element was buying.
   return (
-    <form onSubmit={submit} className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1">
       <div className="flex gap-2">
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            // Otherwise Enter submits whichever form this is sitting in, which
+            // for the new-race form means creating the race.
+            e.preventDefault();
+            submit();
+          }}
           placeholder={label}
           className="min-w-0 flex-1 rounded border border-neutral-700 bg-transparent p-3"
         />
         <button
-          type="submit"
+          type="button"
+          onClick={submit}
           disabled={busy || !name.trim()}
           className="rounded border border-neutral-700 px-4 disabled:opacity-40"
         >
@@ -55,6 +67,6 @@ export default function AddMember({
         </button>
       </div>
       {error && <p className="text-sm text-red-500">{error}</p>}
-    </form>
+    </div>
   );
 }

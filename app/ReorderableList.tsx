@@ -36,6 +36,10 @@ export default function ReorderableList({
         <li key={id} ref={registerRow(id)} style={rowStyle(id)}>
           <div className="flex items-center gap-2">
             <button
+              // Explicit, because this list is rendered inside a <form> on the
+              // new-race and backfill screens and a button with no type is a
+              // submit button — a tap on the drag handle would create the race.
+              type="button"
               aria-label={`Reorder ${id}`}
               disabled={disabled}
               {...dragHandlers(id)}
