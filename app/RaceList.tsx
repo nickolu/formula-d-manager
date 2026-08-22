@@ -38,9 +38,8 @@ export default function RaceList({
     return <p className="mt-8 text-neutral-500">Loading races…</p>;
   }
 
-  // A race is "on" until it is sealed. createRace writes status "live"
-  // immediately, so "scheduled" never occurs in practice today — but grouping
-  // on "not complete" keeps working if it ever does.
+  // A race is "on" until it is sealed — scheduled races belong up here with the
+  // live ones, since a player arriving before the flag drops is the normal case.
   const current = races.filter((r) => r.status !== "complete");
   const past = races.filter((r) => r.status === "complete");
 
@@ -126,6 +125,9 @@ function AdminRow({ race }: { race: Race }) {
         </Link>
         <Link href={`/race/${race.id}/results`} className="text-emerald-500">
           results
+        </Link>
+        <Link href={`/race/${race.id}/settings`} className="text-emerald-500">
+          settings
         </Link>
       </span>
     </li>

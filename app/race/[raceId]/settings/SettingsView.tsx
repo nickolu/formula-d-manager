@@ -9,6 +9,7 @@ import {
   setPositionOrder,
   updateRaceSettings,
 } from "@/lib/race";
+import Nav from "@/app/Nav";
 import ReorderableList from "@/app/ReorderableList";
 import type { PlayerId } from "@/lib/types";
 
@@ -16,11 +17,13 @@ import type { PlayerId } from "@/lib/types";
  * How this race is configured, and — while it is still `scheduled` — who is on
  * the grid.
  *
+ * A sibling route rather than a player subview: this is commissioner work, the
+ * same as the results screen, and it does not belong in a tab bar a player
+ * thumbs through mid-game. It is reached from the race list on /admin.
+ *
  * Every change goes through updateRaceSettings / removePlayer in lib/race.ts,
  * which append an event in the same transaction. Nothing here writes a document
  * directly.
- *
- * This is the container items 7, 9 and 11 hang their toggles off.
  */
 export default function SettingsView({ raceId }: { raceId: string }) {
   const { race, loading } = useRace(raceId);
@@ -52,8 +55,8 @@ export default function SettingsView({ raceId }: { raceId: string }) {
     }
   }
 
-  if (loading) return <p className="p-4 text-neutral-400">Connecting…</p>;
-  if (!race) return <p className="p-4 text-neutral-400">Race not found.</p>;
+  if (loading) return <p className="p-8 text-neutral-400">Connecting…</p>;
+  if (!race) return <p className="p-8 text-neutral-400">Race not found.</p>;
 
   const scheduled = race.status === "scheduled";
   const grid = live?.positionOrder ?? [];
@@ -70,9 +73,14 @@ export default function SettingsView({ raceId }: { raceId: string }) {
     );
 
   return (
-    <main className="flex flex-col gap-6 p-4">
-      <h1 className="text-xs uppercase tracking-widest text-neutral-500">
+    <main className="mx-auto flex w-full max-w-xl flex-col gap-6 p-4">
+      <Nav raceId={raceId} />
+
+      <h1 className="text-2xl font-semibold">
         Race settings
+        <span className="ml-3 text-base font-normal text-neutral-500">
+          {race.track}
+        </span>
       </h1>
 
       <section className="flex flex-col gap-4">
@@ -219,8 +227,8 @@ export default function SettingsView({ raceId }: { raceId: string }) {
                 no reason given reads as a bug. */}
             <p className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-400">
               The roster is locked — this race has started. Removing a car now
-              would mean rewriting a round already in progress. Retire it on the
-              turn-order tab instead; that is reversible and leaves a trail.
+              would mean rewriting a round already in progress. Retire it from
+              the player view instead; that is reversible and leaves a trail.
             </p>
             <ol className="mt-3 flex flex-col gap-1">
               {grid.map((id, i) => (

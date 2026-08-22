@@ -121,7 +121,7 @@ export default function PlayerView({ raceId }: { raceId: string }) {
         </button>
 
         <p className="text-center text-sm text-neutral-500">
-          The grid is still editable on the Settings tab.
+          The grid can still be changed from race settings.
         </p>
 
         {actionError && <p className="text-center text-red-500">{actionError}</p>}
@@ -148,6 +148,29 @@ export default function PlayerView({ raceId }: { raceId: string }) {
     [next[index], next[target]] = [next[target], next[index]];
     return run(() => setPositionOrder(raceId, next, { source: "manual" }));
   }
+
+  /**
+   * The reverse gear, deliberately kept OUT of the row with the primary
+   * button and made quiet.
+   *
+   * Next turn is tapped a few hundred times a night; this is tapped almost
+   * never, and tapping it by mistake un-does a move and stops the clock. Small
+   * and adjacent was the wrong trade — anything beside a target that big gets
+   * caught by a thumb eventually. It lives at the top of the screen instead,
+   * the hardest place to hit by accident one-handed, and looks like a link
+   * rather than a control you are meant to reach for.
+   */
+  const backATurn = (
+    <div className="-mt-2 flex justify-end">
+      <button
+        onClick={() => run(() => rewindTurn(raceId, { source: "manual" }))}
+        disabled={busy}
+        className="px-2 py-1 text-xs uppercase tracking-widest text-neutral-600 underline decoration-neutral-800 underline-offset-4 active:text-neutral-300 disabled:opacity-30"
+      >
+        ↩ back a turn
+      </button>
+    </div>
+  );
 
   // Rendered in both the running-turn view and the between-rounds
   // interstitial — the order is exactly what the table is checking there.
@@ -291,22 +314,15 @@ export default function PlayerView({ raceId }: { raceId: string }) {
           </p>
         </div>
 
-        <div className="flex gap-2">
-          <button
-            onClick={() => run(() => rewindTurn(raceId, { source: "manual" }))}
-            disabled={busy}
-            className="rounded-3xl border border-neutral-700 px-5 text-lg text-neutral-400 active:bg-neutral-800 disabled:opacity-30"
-          >
-            ↩ Back
-          </button>
-          <button
-            onClick={() => run(() => startRound(raceId, { source: "manual" }))}
-            disabled={busy}
-            className="flex-1 rounded-3xl bg-emerald-600 py-8 text-3xl font-bold active:bg-emerald-700 disabled:opacity-50"
-          >
-            Start round {live.currentRound}
-          </button>
-        </div>
+        {backATurn}
+
+        <button
+          onClick={() => run(() => startRound(raceId, { source: "manual" }))}
+          disabled={busy}
+          className="rounded-3xl bg-emerald-600 py-8 text-3xl font-bold active:bg-emerald-700 disabled:opacity-50"
+        >
+          Start round {live.currentRound}
+        </button>
 
         {standings}
 
@@ -325,6 +341,8 @@ export default function PlayerView({ raceId }: { raceId: string }) {
         </span>
       </div>
 
+      {backATurn}
+
       <div className="text-center">
         <p className="text-xs uppercase tracking-widest text-neutral-500">
           Current turn
@@ -334,29 +352,18 @@ export default function PlayerView({ raceId }: { raceId: string }) {
         </p>
       </div>
 
-      <div className="flex gap-2">
-        {/* Deliberately small beside Next turn: this is a correction, and a
-            fat-fingered rewind mid-game is worse than a slow one. */}
-        <button
-          onClick={() => run(() => rewindTurn(raceId, { source: "manual" }))}
-          disabled={busy}
-          className="rounded-3xl border border-neutral-700 px-5 text-lg text-neutral-400 active:bg-neutral-800 disabled:opacity-30"
-        >
-          ↩ Back
-        </button>
-        <button
-          onClick={() => run(() => advanceTurn(raceId, { source: "manual" }))}
-          disabled={busy}
-          className="flex-1 rounded-3xl bg-emerald-600 py-10 text-4xl font-bold active:bg-emerald-700 disabled:opacity-50"
-        >
-          Next turn
-          <span className="mt-2 block text-base font-normal opacity-80">
-            {nextUp
-              ? `up next: ${nameOf(nextUp)}`
-              : `ends round ${live.currentRound} — next order comes from standings`}
-          </span>
-        </button>
-      </div>
+      <button
+        onClick={() => run(() => advanceTurn(raceId, { source: "manual" }))}
+        disabled={busy}
+        className="rounded-3xl bg-emerald-600 py-10 text-4xl font-bold active:bg-emerald-700 disabled:opacity-50"
+      >
+        Next turn
+        <span className="mt-2 block text-base font-normal opacity-80">
+          {nextUp
+            ? `up next: ${nameOf(nextUp)}`
+            : `ends round ${live.currentRound} — next order comes from standings`}
+        </span>
+      </button>
 
       {standings}
 

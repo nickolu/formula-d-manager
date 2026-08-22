@@ -8,13 +8,13 @@ import { usePathname } from "next/navigation";
  * and it survives the page scrolling.
  *
  * Only subviews that exist get a tab — a tab leading to a 404 is worse than no
- * tab. Four fit at phone width; a fifth would need an overflow.
+ * tab. Race settings is deliberately NOT one of them: it is commissioner work,
+ * and it lives at /race/:id/settings alongside the results screen.
  */
 const TABS = [
   { segment: "", label: "Turn order" },
   { segment: "my-racer", label: "My racer" },
   { segment: "history", label: "History" },
-  { segment: "settings", label: "Settings" },
 ];
 
 export default function PlayerTabs({ raceId }: { raceId: string }) {

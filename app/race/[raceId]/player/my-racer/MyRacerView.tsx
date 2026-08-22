@@ -111,7 +111,7 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
         <>
           {order.length > 0 && (
             <p className="text-sm text-neutral-400">
-              Which car is yours? Tap it to have a look first.
+              Which racer is yours? Tap one to have a look first.
             </p>
           )}
           <ul className="flex flex-col gap-2">
@@ -159,11 +159,14 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
               in it — an empty list with no way to act is a dead end, and this
               is the first screen a player sees. */}
           <div className="flex flex-col gap-2 rounded-2xl border border-neutral-800 p-4">
-            <p className="text-sm text-neutral-400">
-              {order.length === 0
-                ? "Nobody is racing yet. Put your name in."
-                : "Not on the list? Join in — you'll start at the back."}
-            </p>
+            {/* The empty grid still needs a sentence — an empty list with no
+                way to act is a dead end. A populated one doesn't: the field and
+                the button say what they do. */}
+            {order.length === 0 && (
+              <p className="text-sm text-neutral-400">
+                Nobody is racing yet. Put your name in.
+              </p>
+            )}
             <input
               value={joinName}
               onChange={(e) => setJoinName(e.target.value)}
@@ -180,7 +183,7 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
               disabled={busy || !joinName.trim()}
               className="rounded-2xl bg-emerald-600 py-4 text-lg font-semibold active:bg-emerald-700 disabled:opacity-40"
             >
-              Join race
+              Add new racer
             </button>
           </div>
         </>
@@ -212,7 +215,7 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
                 disabled={busy || !uid}
                 className="rounded-2xl bg-emerald-600 py-5 text-xl font-semibold active:bg-emerald-700 disabled:opacity-50"
               >
-                This one&rsquo;s mine
+                Select racer
               </button>
               <button
                 onClick={() => setPreviewing(null)}

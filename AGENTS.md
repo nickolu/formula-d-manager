@@ -179,9 +179,14 @@ it already exists so it can never clobber a scoring table tuned in the console.
   House rules churn; changing them must not require a deploy.
 - Every event carries `source: "manual" | "chat" | "system"` so chat-entered
   mistakes stay traceable.
-- The three race screens are `/race/:id/player` (what a player looks at, on a
-  phone or the shared tablet), `/race/:id/screen` (the big screen) and
-  `/race/:id/results` (corrections and finishing). Each has been renamed twice —
+- The race screens are `/race/:id/player` (what a player looks at, on a phone
+  or the shared tablet), `/race/:id/screen` (the big screen), and two
+  commissioner ones: `/race/:id/results` (corrections and finishing) and
+  `/race/:id/settings`. **Race settings is deliberately not a player subview** —
+  it is commissioner work, it does not belong in a tab bar a player thumbs
+  through mid-game, and it sits beside the results screen for the same reason
+  that one does. Both are reached from the race list on `/admin`. The player
+  and screen views have been renamed twice —
   `table` → `device` → `player`, `entry` → `edit` → `results` — and every
   historical path redirects **straight to the current one**, never chaining
   through the intermediate name: the tablets have old URLs bookmarked and a
@@ -221,6 +226,13 @@ it already exists so it can never clobber a scoring table tuned in the console.
   `rewindTurn` treats the interstitial as a boundary crossing and reuses that
   branch — in the interstitial `roundOrder` is already the *next* round's
   snapshot, so stepping back within it would be meaningless.
+- **The reverse gear is deliberately not beside Next turn.** "Back a turn" is a
+  small, muted link at the *top* of the player view, not a button in the row
+  with the primary action. Next turn is tapped a few hundred times a night and
+  a rewind is tapped almost never, but a mistaken rewind un-does a move and
+  stops the clock — and anything placed beside a target that big eventually
+  gets caught by a thumb. Small-and-adjacent was tried first and was the wrong
+  trade. Keep it visually quiet and physically far from the primary button.
 - **Nobody's turn means two different things** — the race is over, or it is
   between rounds. Every view discriminates on `race.status === "complete"`,
   never on the null `currentPlayerId`. `finishRace` nulls it too.
@@ -285,7 +297,8 @@ it already exists so it can never clobber a scoring table tuned in the console.
   is not, and it survives the page scrolling. Active state comes from
   `usePathname`, not from state, which is what makes a cold load land on the
   right tab. Only subviews that exist get a tab: a tab leading to a 404 is
-  worse than no tab.
+  worse than no tab — and race settings is not one of them, being a sibling
+  route rather than a subview.
 - The **history subview** renders the event log as sentences, newest first —
   the log is the product, and this is the first view that shows it as such.
   `describe()` in `HistoryView.tsx` switches exhaustively over `RaceEvent` and

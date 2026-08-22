@@ -6,7 +6,14 @@ the settings container that items 7, 9 and 11 put their toggles in.
 
 **Depends on:** item 3 (subview routing), item 4 (`turnDurationDefaultMs`).
 
-Route: `app/race/[raceId]/player/settings/page.tsx`, plus its tab.
+Route: `app/race/[raceId]/settings/page.tsx`.
+
+**Changed while building, at the user's direction:** this was specified as a
+player subview with a tab. It is not one. Race settings is commissioner work and
+does not belong in a tab bar a player thumbs through mid-game, so it is a
+sibling route beside `/results` — the commissioner's other screen — and is
+reached from the race list on `/admin`. Items 7, 9 and 11 put their toggles
+there rather than in the player view.
 
 ## Where each field lives
 
