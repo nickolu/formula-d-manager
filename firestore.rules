@@ -20,8 +20,28 @@ service cloud.firestore {
       allow read, write: if signedIn();
     }
 
+    // A match on the season does NOT cover its subcollections — a missing
+    // nested match is a silent permission denial at the table, not a build
+    // error. So members and teams are declared here even though items 14 and
+    // 17 are what create them: rules are one file, and a partial ruleset means
+    // the next item ships and mysteriously cannot write.
     match /seasons/{seasonId} {
       allow read, write: if signedIn();
+
+      // Append-only, exactly like the race log. A team move is otherwise
+      // unrecoverable, so nothing may rewrite the record of one.
+      match /events/{eventId} {
+        allow read, create: if signedIn();
+        allow update, delete: if false;
+      }
+
+      match /members/{playerId} {
+        allow read, write: if signedIn();
+      }
+
+      match /teams/{teamId} {
+        allow read, write: if signedIn();
+      }
     }
 
     match /races/{raceId} {

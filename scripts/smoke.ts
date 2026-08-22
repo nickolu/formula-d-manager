@@ -23,12 +23,14 @@ import {
 import { app, db } from "../lib/firebase";
 import {
   advanceTurn,
+  amendRaceResult,
   claimRacer,
   completeLap,
   deleteRace,
   finishRace,
   joinRace,
   liveDoc,
+  participantDoc,
   pauseTurn,
   raceDoc,
   releaseRacer,
@@ -45,21 +47,66 @@ import {
   uncompleteLap,
   updateRaceSettings,
 } from "../lib/race";
-import { computeStandings, pointsFor } from "../lib/scoring";
-import { DEFAULT_SCORING } from "../lib/seasons";
-import { createRace, DEFAULT_CAR_STATUS_SPEC } from "../lib/setup";
+import {
+  computeStandings,
+  computeTeamStandings,
+  pointsFor,
+} from "../lib/scoring";
+import {
+  addSeasonMember,
+  claimSeasonRacer,
+  createSeason,
+  DEFAULT_SCORING,
+  deleteSeason,
+  releaseSeasonRacer,
+  removeSeasonMember,
+  seasonDoc,
+  updateTeamConfig,
+  seasonEventsCol,
+  seasonMemberDoc,
+  updateSeason,
+} from "../lib/seasons";
+import { backfillRace, createRace, DEFAULT_CAR_STATUS_SPEC } from "../lib/setup";
+import {
+  assignToTeam,
+  createTeam,
+  DEFAULT_TEAM_CONFIG,
+  deleteTeam,
+  joinTeam,
+  leaveTeam,
+  recolourTeam,
+  renameTeam,
+  teamDoc,
+} from "../lib/teams";
 import { readTimer } from "../lib/timer";
-import type { LiveState, Participant, Race } from "../lib/types";
+import type {
+  LiveState,
+  Participant,
+  Race,
+  RaceEvent,
+  Season,
+  SeasonEvent,
+  Team,
+} from "../lib/types";
 
 /** The race's configured turn length — what a rewind must reset the clock to. */
 const TURN_SECONDS = 90;
 const TURN_MS = TURN_SECONDS * 1000;
 
 let failures = 0;
+/**
+ * Kept so the summary can name what failed. A run that scrolls past 200 lines
+ * and ends in "2 CHECK(S) FAILED" is not diagnosable, and an intermittent
+ * failure is exactly the one you cannot reproduce to go looking for.
+ */
+const failed: string[] = [];
 
 function check(label: string, ok: boolean, detail = "") {
   console.log(`${ok ? "  ok  " : "FAIL  "}${label}${detail ? ` — ${detail}` : ""}`);
-  if (!ok) failures++;
+  if (!ok) {
+    failures++;
+    failed.push(`${label}${detail ? ` — ${detail}` : ""}`);
+  }
 }
 
 /** Asserts that a guard actually fires, rather than silently writing bad data. */
@@ -108,9 +155,96 @@ async function laps(raceId: string) {
   );
 }
 
+async function seasonEvents(seasonId: string): Promise<SeasonEvent[]> {
+  const snap = await getDocs(seasonEventsCol(seasonId));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as SeasonEvent);
+}
+
+async function seasonEventTypes(seasonId: string): Promise<string[]> {
+  return (await seasonEvents(seasonId)).map((e) => e.type);
+}
+
 async function main() {
   await signInAnonymously(getAuth(app));
   console.log("signed in anonymously\n");
+
+  console.log("the season a race lives in:");
+  const seasonId = await createSeason(
+    { name: "SMOKE-TEST season" },
+    { source: "manual" },
+  );
+  const seededSeason = (await getDoc(seasonDoc(seasonId))).data() as Season;
+  check("the season document exists", !!seededSeason);
+  check(
+    "it starts from the house scoring table",
+    seededSeason.scoringConfig.positionPoints.join(",") ===
+      DEFAULT_SCORING.positionPoints.join(","),
+  );
+  check("a new season is active", seededSeason.archived === undefined);
+  check(
+    "creating a season seeds its log",
+    (await seasonEventTypes(seasonId)).includes("seasonCreated"),
+  );
+  await rejects(
+    () => createSeason({ name: "   " }, { source: "manual" }),
+    "a season with no name is refused",
+  );
+  await rejects(
+    () =>
+      createSeason(
+        {
+          name: "SMOKE-TEST bad scoring",
+          scoringConfig: { positionPoints: [], pointsBeyondTable: 0 },
+        },
+        { source: "manual" },
+      ),
+    "a scoring table with no points at all is refused",
+  );
+
+  await updateSeason(seasonId, { name: "SMOKE-TEST season 2" }, { source: "manual" });
+  const renamed = (await getDoc(seasonDoc(seasonId))).data() as Season;
+  check("a season can be renamed", renamed.name === "SMOKE-TEST season 2", renamed.name);
+  const renameEvent = (await seasonEvents(seasonId)).find(
+    (e) => e.type === "seasonSettingsChanged",
+  );
+  check(
+    "the settings event carries only what changed",
+    renameEvent?.type === "seasonSettingsChanged" &&
+      Object.keys(renameEvent.patch).join(",") === "name",
+    renameEvent?.type === "seasonSettingsChanged"
+      ? Object.keys(renameEvent.patch).join(",")
+      : "none",
+  );
+  await updateSeason(seasonId, { archived: true }, { source: "manual" });
+  check(
+    "a season can be archived",
+    ((await getDoc(seasonDoc(seasonId))).data() as Season).archived === true,
+  );
+  await updateSeason(seasonId, { archived: false }, { source: "manual" });
+  check(
+    "and reopened",
+    ((await getDoc(seasonDoc(seasonId))).data() as Season).archived === false,
+  );
+  await rejects(
+    () => updateSeason(seasonId, { name: "  " }, { source: "manual" }),
+    "renaming a season to nothing is refused",
+  );
+  await rejects(
+    () => updateSeason("no-such-season", { name: "x" }, { source: "manual" }),
+    "editing a season that does not exist is refused",
+  );
+
+  await rejects(
+    () =>
+      createRace({
+        track: "SMOKE-TEST orphan",
+        lapCount: 1,
+        turnSeconds: TURN_SECONDS,
+        playerNames: ["Alpha"],
+        seasonId: "no-such-season",
+      }),
+    "a race in a season that does not exist is refused",
+  );
 
   const raceId = await createRace({
     track: "SMOKE-TEST",
@@ -119,8 +253,19 @@ async function main() {
     // Delta is removed below, before the flag drops — the rest of the run is a
     // three-car race, exactly as it was before the roster was editable.
     playerNames: ["Alpha", "Bravo", "Charlie", "Delta"],
+    seasonId,
+    location: "Smoke House",
+    scheduledAt: new Date(2021, 2, 4),
   });
-  console.log(`created race ${raceId}\n`);
+  console.log(`\ncreated race ${raceId}\n`);
+  check(
+    "the race belongs to the season",
+    ((await getDoc(doc(db, "races", raceId))).data() as Race).seasonId === seasonId,
+  );
+  await rejects(
+    () => deleteSeason(seasonId),
+    "deleting a season that has races is refused",
+  );
 
   const states: LiveState[] = [];
   const unsubscribe = onSnapshot(liveDoc(raceId), (snap) => {
@@ -138,6 +283,12 @@ async function main() {
 
   const created = (await getDoc(doc(db, "races", raceId))).data() as Race;
   check("a new race is scheduled, not live", created.status === "scheduled", created.status);
+  check("whose house is recorded", created.location === "Smoke House", created.location);
+  check(
+    "the date given is the date stored, not the moment of creation",
+    created.scheduledAt.toDate().getFullYear() === 2021,
+    created.scheduledAt.toDate().toISOString(),
+  );
   check("an unstarted race has a stopped clock", readTimer(initial, Date.now()).isPaused);
 
   console.log("\nsettings, before the flag drops:");
@@ -154,6 +305,28 @@ async function main() {
   await rejects(
     () => updateRaceSettings(raceId, { track: "   " }, { source: "manual" }),
     "an empty track name is refused",
+  );
+
+  await updateRaceSettings(
+    raceId,
+    { location: "  Smoke Annex  ", scheduledAt: new Date(2022, 5, 6) },
+    { source: "manual" },
+  );
+  const relocated = (await getDoc(doc(db, "races", raceId))).data() as Race;
+  check(
+    "whose house is editable, and trimmed",
+    relocated.location === "Smoke Annex",
+    relocated.location,
+  );
+  check(
+    "so is the date",
+    relocated.scheduledAt.toDate().getFullYear() === 2022,
+    relocated.scheduledAt.toDate().toISOString(),
+  );
+  await updateRaceSettings(raceId, { location: "" }, { source: "manual" });
+  check(
+    "an empty location clears it rather than being refused",
+    ((await getDoc(doc(db, "races", raceId))).data() as Race).location === "",
   );
 
   mark0 = states.length;
@@ -604,11 +777,13 @@ async function main() {
   );
 
   console.log("\nscoring is pure — no Firestore involved:");
-  check("winner takes the top of the table", pointsFor(1, false, DEFAULT_SCORING) === 10);
-  check("past the table scores the tail value", pointsFor(99, false, DEFAULT_SCORING) === DEFAULT_SCORING.pointsBeyondTable);
+  check("winner takes the top of the table", pointsFor(1, DEFAULT_SCORING) === 10);
+  check("past the table scores the tail value", pointsFor(99, DEFAULT_SCORING) === DEFAULT_SCORING.pointsBeyondTable);
+  // Retirement is not a special case: the order already says who went out and
+  // when, so the placing is the score.
   check(
-    "a DNF from the lead still scores a DNF",
-    pointsFor(1, true, DEFAULT_SCORING) === DEFAULT_SCORING.dnfPoints,
+    "a retirement scores its placing like any other result",
+    pointsFor(3, DEFAULT_SCORING) === DEFAULT_SCORING.positionPoints[2],
   );
 
   console.log("\nfinishing the race:");
@@ -681,7 +856,7 @@ async function main() {
   );
 
   console.log("\nstandings derive from the finished race:");
-  const standings = computeStandings([finished], DEFAULT_SCORING, "default");
+  const standings = computeStandings([finished], DEFAULT_SCORING, seasonId);
   const points = new Map(standings.map((s) => [s.playerId, s.points]));
   check(
     "points follow the finishing order",
@@ -689,21 +864,650 @@ async function main() {
     `charlie=${points.get("charlie")} alpha=${points.get("alpha")}`,
   );
   check(
-    "the retirement scores dnfPoints, not third place",
-    points.get("bravo") === DEFAULT_SCORING.dnfPoints,
+    "the retirement scores third place, because that is where it was placed",
+    points.get("bravo") === DEFAULT_SCORING.positionPoints[2],
     `bravo=${points.get("bravo")}`,
   );
   check("the winner leads the standings", standings[0]?.playerId === "charlie");
+  // A retirement is classified, not excluded: bravo was placed third and that
+  // is third, whatever went wrong on the way. The only column it changes is
+  // dnfs. Splitting this — a best finish of third with no podium — would put
+  // two contradictory numbers on one row.
+  const bravoRow = standings.find((s) => s.playerId === "bravo");
+  check("a retirement's placing is its best finish", bravoRow?.bestFinish === 3, `${bravoRow?.bestFinish}`);
+  check("a retirement in the top three is a podium", bravoRow?.podiums === 1, `${bravoRow?.podiums}`);
+  check("...and is still counted as a DNF", bravoRow?.dnfs === 1);
   check(
-    "a retirement is not counted as a podium",
-    standings.find((s) => s.playerId === "bravo")?.podiums === 0,
-  );
-  check(
-    "a retirement leaves bestFinish unset",
-    standings.find((s) => s.playerId === "bravo")?.bestFinish === null,
+    "...and counts toward the tie countback like any other third",
+    bravoRow?.finishCounts[2] === 1,
+    `${bravoRow?.finishCounts}`,
   );
 
   unsubscribe();
+
+  console.log("\nthe season roster — the league is not the grid:");
+  const rosterRaceId = await createRace({
+    track: "SMOKE-TEST roster",
+    lapCount: 1,
+    turnSeconds: TURN_SECONDS,
+    playerNames: ["Alpha", "Bravo"],
+    seasonId,
+  });
+
+  const echo = await addSeasonMember(seasonId, "Echo", { source: "manual" });
+  check(
+    "the member document is written",
+    (await getDoc(seasonMemberDoc(seasonId, echo))).exists(),
+  );
+  check(
+    "adding a member is logged",
+    (await seasonEventTypes(seasonId)).includes("memberAdded"),
+  );
+  check(
+    "they join the race that has not started",
+    (
+      (await getDoc(liveDoc(rosterRaceId))).data() as LiveState
+    ).positionOrder.includes(echo),
+  );
+  // The whole point of item 14: the sealed race is never written to. Adding
+  // them to result.order would mutate the scoring cache of a race they did not
+  // run so the standings could read a zero back out of it.
+  const sealed = (await getDoc(raceDoc(raceId))).data() as Race;
+  check(
+    "...and the finished race is left alone",
+    !sealed.result?.order.includes(echo),
+    sealed.result?.order.join(","),
+  );
+  await rejects(
+    () => addSeasonMember(seasonId, "Echo", { source: "manual" }),
+    "adding the same member twice is refused",
+  );
+  await rejects(
+    () => addSeasonMember(seasonId, "   ", { source: "manual" }),
+    "a member with no name is refused",
+  );
+
+  const seeded = computeStandings([finished], DEFAULT_SCORING, seasonId, [
+    "alpha",
+    "bravo",
+    "charlie",
+    echo,
+  ]);
+  const echoRow = seeded.find((r) => r.playerId === echo);
+  check(
+    "a member who missed the race still has a row",
+    echoRow?.points === 0 && echoRow?.races === 0,
+    `${echoRow?.points}pts/${echoRow?.races} races`,
+  );
+  check("the roster does not disturb the finishers", seeded[0]?.playerId === "charlie");
+  // Absent is not retired, and the difference is no longer subtle: a car that
+  // went out was there and is placed for it; a driver who stayed home was not.
+  check(
+    "a missed race scores nothing, a retirement scores its placing",
+    seeded.find((r) => r.playerId === echo)?.points === 0 &&
+      seeded.find((r) => r.playerId === "bravo")?.points ===
+        DEFAULT_SCORING.positionPoints[2],
+  );
+  check(
+    "...and a missed race is not counted as an entry",
+    seeded.find((r) => r.playerId === echo)?.races === 0 &&
+      seeded.find((r) => r.playerId === "bravo")?.races === 1,
+  );
+
+  await removeSeasonMember(seasonId, echo, { source: "manual" });
+  check(
+    "removing a member takes them off the unstarted grid",
+    !(
+      (await getDoc(liveDoc(rosterRaceId))).data() as LiveState
+    ).positionOrder.includes(echo),
+  );
+  check(
+    "the member document goes with them",
+    !(await getDoc(seasonMemberDoc(seasonId, echo))).exists(),
+  );
+  check(
+    "leaving is logged",
+    (await seasonEventTypes(seasonId)).includes("memberRemoved"),
+  );
+  await rejects(
+    () => removeSeasonMember(seasonId, echo, { source: "manual" }),
+    "removing someone who is not in the season is refused",
+  );
+
+  await startRace(rosterRaceId, { source: "manual" });
+  const foxtrot = await addSeasonMember(seasonId, "Foxtrot", { source: "manual" });
+  const joinedLive = (await getDoc(liveDoc(rosterRaceId))).data() as LiveState;
+  check(
+    "a member joins a live race in standings only, racing from next round",
+    joinedLive.positionOrder.includes(foxtrot) &&
+      !joinedLive.roundOrder.includes(foxtrot),
+    joinedLive.roundOrder.join(","),
+  );
+  await rejects(
+    () => removeSeasonMember(seasonId, foxtrot, { source: "manual" }),
+    "removing a member who is racing right now is refused",
+  );
+
+  console.log("\nthe season claim — claim once, not every game night:");
+  await claimSeasonRacer(seasonId, foxtrot, "uid-smoke-1", null, {
+    source: "manual",
+  });
+  check(
+    "the claim lands on the member",
+    (await getDoc(seasonMemberDoc(seasonId, foxtrot))).data()?.claimedBy ===
+      "uid-smoke-1",
+  );
+  await rejects(
+    () =>
+      claimSeasonRacer(seasonId, foxtrot, "uid-smoke-2", null, {
+        source: "manual",
+      }),
+    "a second phone cannot take a claimed racer",
+  );
+  await claimSeasonRacer(seasonId, foxtrot, "uid-smoke-1", null, {
+    source: "manual",
+  });
+  check("re-claiming your own racer is a no-op, not an error", true);
+  await rejects(
+    () =>
+      claimSeasonRacer(seasonId, "nobody", "uid-smoke-1", null, {
+        source: "manual",
+      }),
+    "claiming someone who is not in the season is refused",
+  );
+
+  // The whole point: a new race seeds its participants from the season claim,
+  // so the phone does not have to claim again.
+  const seededRaceId = await createRace({
+    track: "SMOKE-TEST seeded",
+    lapCount: 1,
+    turnSeconds: TURN_SECONDS,
+    playerNames: ["Foxtrot", "Alpha"],
+    seasonId,
+  });
+  check(
+    "a new race seeds the claim from the season",
+    ((await getDoc(participantDoc(seededRaceId, foxtrot))).data() as Participant)
+      ?.claimedBy === "uid-smoke-1",
+  );
+  check(
+    "...and leaves an unclaimed racer unclaimed",
+    ((await getDoc(participantDoc(seededRaceId, "alpha"))).data() as Participant)
+      ?.claimedBy === null,
+  );
+  // The other half of the seeding: a player who joins a race that already
+  // exists picks the claim up too, which is what makes "claim once a season"
+  // true for a latecomer and not only for a race created afterwards.
+  const golf = await addSeasonMember(seasonId, "Golf", { source: "manual" });
+  await claimSeasonRacer(seasonId, golf, "uid-smoke-3", null, {
+    source: "manual",
+  });
+  await removePlayer(seededRaceId, golf, { source: "manual" });
+  await joinRace(seededRaceId, "Golf", null, { source: "manual" });
+  check(
+    "joining an existing race seeds the claim too",
+    ((await getDoc(participantDoc(seededRaceId, golf))).data() as Participant)
+      ?.claimedBy === "uid-smoke-3",
+  );
+
+  await finishRace(seededRaceId, [foxtrot, "alpha", golf], [], {
+    source: "manual",
+  });
+  await deleteRace(seededRaceId);
+
+  await releaseSeasonRacer(seasonId, foxtrot, "uid-smoke-2", {
+    source: "manual",
+  });
+  check(
+    "a phone that does not hold the claim cannot release it",
+    (await getDoc(seasonMemberDoc(seasonId, foxtrot))).data()?.claimedBy ===
+      "uid-smoke-1",
+  );
+  await releaseSeasonRacer(seasonId, foxtrot, "uid-smoke-1", {
+    source: "manual",
+  });
+  check(
+    "the holder can give it back",
+    (await getDoc(seasonMemberDoc(seasonId, foxtrot))).data()?.claimedBy === null,
+  );
+  check(
+    "season claims are logged",
+    (await seasonEventTypes(seasonId)).includes("seasonRacerClaimed") &&
+      (await seasonEventTypes(seasonId)).includes("seasonRacerReleased"),
+  );
+
+  await finishRace(rosterRaceId, ["alpha", "bravo", foxtrot, golf], [], {
+    source: "manual",
+  });
+  await deleteRace(rosterRaceId);
+  await removeSeasonMember(seasonId, foxtrot, { source: "manual" });
+  check(
+    "...and allowed again once no race is running",
+    !(await getDoc(seasonMemberDoc(seasonId, foxtrot))).exists(),
+  );
+
+  console.log("\nteams — two invariants Firestore cannot query for:");
+  await updateTeamConfig(
+    seasonId,
+    { ...DEFAULT_TEAM_CONFIG, enabled: true, teamSize: 2 },
+    { source: "manual" },
+  );
+  const withTeams = (await getDoc(seasonDoc(seasonId))).data() as Season;
+  check("teams can be switched on", withTeams.teamConfig?.enabled === true);
+  check(
+    "switching on writes a usable config, not a lone flag",
+    (withTeams.teamConfig?.palette?.length ?? 0) > 0,
+  );
+
+  const teamA = await createTeam(seasonId, "Smoke Red", "ferrari", {
+    source: "manual",
+  });
+  check(
+    "the colour is claimed on the season doc",
+    ((await getDoc(seasonDoc(seasonId))).data() as Season).teamColors?.ferrari ===
+      teamA,
+  );
+  await rejects(
+    () => createTeam(seasonId, "Smoke Red II", "ferrari", { source: "manual" }),
+    "a second team cannot take a claimed colour",
+  );
+  await rejects(
+    () => createTeam(seasonId, "Smoke Nope", "not-a-colour", { source: "manual" }),
+    "a colour outside the palette is refused",
+  );
+
+  const teamB = await createTeam(seasonId, "Smoke Blue", "mercedes", {
+    source: "manual",
+  });
+
+  // The whole reason the colour map is denormalized onto the season document:
+  // two phones picking the same colour at the same moment.
+  const colourRace = await Promise.allSettled([
+    recolourTeam(seasonId, teamA, "redbull", { source: "manual" }),
+    recolourTeam(seasonId, teamB, "redbull", { source: "manual" }),
+  ]);
+  check(
+    "two concurrent colour claims: exactly one wins",
+    colourRace.filter((r) => r.status === "fulfilled").length === 1,
+    colourRace.map((r) => r.status).join(","),
+  );
+  const afterColourRace = (await getDoc(seasonDoc(seasonId))).data() as Season;
+  check(
+    "the loser's old colour is not left claimed by nobody",
+    Object.keys(afterColourRace.teamColors ?? {}).length === 2,
+    JSON.stringify(afterColourRace.teamColors),
+  );
+
+  await rejects(
+    () =>
+      updateTeamConfig(
+        seasonId,
+        { palette: DEFAULT_TEAM_CONFIG.palette.filter((c) => c.key !== "redbull") },
+        { source: "manual" },
+      ),
+    "a palette colour a team is wearing cannot be removed",
+  );
+
+  await renameTeam(seasonId, teamA, "Smoke Scarlet", { source: "manual" });
+  check(
+    "a team can be renamed",
+    ((await getDoc(teamDoc(seasonId, teamA))).data() as Team).name ===
+      "Smoke Scarlet",
+  );
+
+  // The other denormalized invariant: capacity lives on the team document so a
+  // transaction can read it, and exclusivity lives on the member document.
+  await addSeasonMember(seasonId, "Hotel", { source: "manual" });
+  await addSeasonMember(seasonId, "India", { source: "manual" });
+  await addSeasonMember(seasonId, "Juliet", { source: "manual" });
+  await joinTeam(seasonId, teamA, "hotel", { source: "manual" });
+  check(
+    "membership is written twice — the team's array",
+    ((await getDoc(teamDoc(seasonId, teamA))).data() as Team).members.join(",") ===
+      "hotel",
+  );
+  check(
+    "...and the member's teamId",
+    (await getDoc(seasonMemberDoc(seasonId, "hotel"))).data()?.teamId === teamA,
+  );
+  await rejects(
+    () => joinTeam(seasonId, teamB, "hotel", { source: "manual" }),
+    "a racer cannot be on two teams",
+  );
+
+  const slotRace = await Promise.allSettled([
+    joinTeam(seasonId, teamA, "india", { source: "manual" }),
+    joinTeam(seasonId, teamA, "juliet", { source: "manual" }),
+  ]);
+  check(
+    "two concurrent joins to the last slot: exactly one wins",
+    slotRace.filter((r) => r.status === "fulfilled").length === 1,
+    slotRace.map((r) => r.status).join(","),
+  );
+  check(
+    "the team is not overfilled",
+    ((await getDoc(teamDoc(seasonId, teamA))).data() as Team).members.length === 2,
+  );
+
+  // The admin path shares the invariants but is allowed to make an uneven team.
+  const leftover = (await getDoc(seasonMemberDoc(seasonId, "india"))).data()
+    ?.teamId
+    ? "juliet"
+    : "india";
+  await assignToTeam(seasonId, teamA, leftover, { source: "manual" });
+  check(
+    "the admin may overfill a team — equal sizes are a house rule, not a check",
+    ((await getDoc(teamDoc(seasonId, teamA))).data() as Team).members.length === 3,
+  );
+
+  // The soft check the player path passes. Not security — there is no auth to
+  // enforce one with — but it is the constraint that holds at a table.
+  await rejects(
+    () =>
+      renameTeam(seasonId, teamB, "Not mine", { source: "manual" }, leftover),
+    "a racer cannot rename a team they are not on",
+  );
+  await renameTeam(
+    seasonId,
+    teamA,
+    "Smoke Crimson",
+    { source: "manual" },
+    leftover,
+  );
+  check(
+    "...but can rename their own",
+    ((await getDoc(teamDoc(seasonId, teamA))).data() as Team).name ===
+      "Smoke Crimson",
+  );
+
+  // Shrinking teamSize must not kick anyone out.
+  await updateTeamConfig(seasonId, { teamSize: 1 }, { source: "manual" });
+  check(
+    "lowering team size kicks nobody",
+    ((await getDoc(teamDoc(seasonId, teamA))).data() as Team).members.length === 3,
+  );
+  await updateTeamConfig(seasonId, { teamSize: 2 }, { source: "manual" });
+
+  await leaveTeam(seasonId, "hotel", { source: "manual" });
+  check(
+    "leaving clears both halves",
+    !((await getDoc(teamDoc(seasonId, teamA))).data() as Team).members.includes(
+      "hotel",
+    ) && (await getDoc(seasonMemberDoc(seasonId, "hotel"))).data()?.teamId === null,
+  );
+
+  const teamAColour = ((await getDoc(teamDoc(seasonId, teamA))).data() as Team)
+    .colorKey;
+  await deleteTeam(seasonId, teamA, { source: "manual" });
+  check(
+    "deleting a team frees its colour",
+    ((await getDoc(seasonDoc(seasonId))).data() as Season).teamColors?.[
+      teamAColour
+    ] === undefined,
+  );
+  check(
+    "...and clears its members' teamId",
+    (await getDoc(seasonMemberDoc(seasonId, leftover))).data()?.teamId === null,
+  );
+  // Team standings are derived the same way driver standings are — pure, and
+  // re-derived from current membership, so a team correction re-scores the
+  // whole season on the next render rather than needing a stored snapshot.
+  const teamTable = computeTeamStandings(
+    [finished],
+    DEFAULT_SCORING,
+    [
+      {
+        id: teamA,
+        name: "Smoke Crimson",
+        colorKey: "redbull",
+        members: ["charlie", "alpha"],
+        createdAt: finished.scheduledAt,
+      },
+      {
+        id: teamB,
+        name: "Smoke Blue",
+        colorKey: "mercedes",
+        members: ["bravo"],
+        createdAt: finished.scheduledAt,
+      },
+    ],
+    { scoring: "sum" },
+    seasonId,
+  );
+  check(
+    "a team scores the sum of its drivers",
+    teamTable[0]?.teamId === teamA && teamTable[0]?.points === 18,
+    `${teamTable[0]?.teamId}=${teamTable[0]?.points}`,
+  );
+  check(
+    "a team whose only driver retired still scores that driver's placing",
+    teamTable[1]?.points === DEFAULT_SCORING.positionPoints[2],
+    `${teamTable[1]?.points}`,
+  );
+  const emptyTeam = computeTeamStandings(
+    [finished],
+    DEFAULT_SCORING,
+    [
+      {
+        id: "ghost",
+        name: "Ghost",
+        colorKey: "haas",
+        members: [],
+        createdAt: finished.scheduledAt,
+      },
+    ],
+    { scoring: "sum" },
+    seasonId,
+  );
+  check(
+    "a team with nobody in it renders on zero rather than throwing",
+    emptyTeam[0]?.points === 0 && emptyTeam[0]?.races === 0,
+  );
+  const averaged = computeTeamStandings(
+    [finished],
+    DEFAULT_SCORING,
+    [
+      {
+        id: teamA,
+        name: "Smoke Crimson",
+        colorKey: "redbull",
+        members: ["charlie", "alpha"],
+        createdAt: finished.scheduledAt,
+      },
+    ],
+    { scoring: "average" },
+    seasonId,
+  );
+  check(
+    "average divides by the drivers who entered, not by team size",
+    averaged[0]?.points === 9,
+    `${averaged[0]?.points}`,
+  );
+
+  const seasonTypes = await seasonEventTypes(seasonId);
+  check(
+    "every team change is logged",
+    ["teamCreated", "teamRenamed", "teamRecoloured", "teamJoined", "teamLeft", "teamDeleted"].every(
+      (t) => seasonTypes.includes(t),
+    ),
+    seasonTypes.filter((t) => t.startsWith("team")).join(","),
+  );
+  await deleteTeam(seasonId, teamB, { source: "manual" });
+  for (const id of ["hotel", "india", "juliet"]) {
+    await removeSeasonMember(seasonId, id, { source: "manual" });
+  }
+
+  console.log("\na sealed race refuses the clock and the turn:");
+  // The player view used to fall straight through to the live controls once a
+  // race was finished, so these all happily kept mutating a sealed race. The
+  // guard is in lib/ and not only in the view, because every caller — the
+  // Phase 3 chatbot included — has to hit the same rule.
+  await rejects(
+    () => advanceTurn(raceId, { source: "manual" }),
+    "a finished race cannot be advanced a turn",
+  );
+  await rejects(
+    () => rewindTurn(raceId, { source: "manual" }),
+    "...or stepped back a turn",
+  );
+  await rejects(
+    () => resumeTurn(raceId, { source: "manual" }),
+    "...or have its clock restarted",
+  );
+  await rejects(
+    () => pauseTurn(raceId, { source: "manual" }),
+    "...or paused",
+  );
+  await rejects(
+    () => startRound(raceId, { source: "manual" }),
+    "...or a new round started",
+  );
+
+  console.log("\nbackfilling a race the app never timed:");
+  const runOn = new Date(2020, 4, 17);
+  const backfilledId = await backfillRace({
+    seasonId,
+    track: "SMOKE-TEST backfill",
+    scheduledAt: runOn,
+    playerNames: ["Bravo", "Alpha", "Charlie"],
+    dnfNames: ["Charlie"],
+  });
+  const backfilled = (await getDoc(raceDoc(backfilledId))).data() as Race;
+  check("it is created already complete", backfilled.status === "complete");
+  check("it is flagged as entered afterwards", backfilled.backfilled === true);
+  check(
+    "it sorts by the date given, not by today",
+    backfilled.scheduledAt.toDate().getFullYear() === 2020,
+    backfilled.scheduledAt.toDate().toISOString(),
+  );
+  check(
+    "the result is denormalized like any finished race",
+    backfilled.result?.order.join(",") === "bravo,alpha,charlie" &&
+      backfilled.result?.dnf.join(",") === "charlie",
+  );
+  // The minimal live doc is what keeps every screen from special-casing a race
+  // the app never timed.
+  const backfilledLive = (await getDoc(liveDoc(backfilledId))).data() as LiveState;
+  check(
+    "a live doc exists so every screen still renders",
+    backfilledLive.currentPlayerId === null &&
+      backfilledLive.currentRound === 0 &&
+      backfilledLive.positionOrder.join(",") === "bravo,alpha,charlie",
+  );
+  const backfilledParticipant = (
+    await getDoc(participantDoc(backfilledId, "charlie"))
+  ).data() as Participant;
+  check(
+    "participants carry their finishing position and flag",
+    backfilledParticipant.finalPosition === 3 && backfilledParticipant.dnf === true,
+  );
+  const backfilledEvents = (
+    await getDocs(collection(db, "races", backfilledId, "events"))
+  ).docs.map((d) => (d.data() as RaceEvent).type);
+  check(
+    "the log gets ordinary raceCreated and raceFinished — no new variant",
+    backfilledEvents.sort().join(",") === "raceCreated,raceFinished",
+    backfilledEvents.join(","),
+  );
+  const backfilledStandings = computeStandings(
+    [{ ...backfilled, id: backfilledId } as Race],
+    DEFAULT_SCORING,
+    seasonId,
+  );
+  check(
+    "it scores like any other race",
+    backfilledStandings[0]?.playerId === "bravo" &&
+      backfilledStandings[0]?.points === 10,
+  );
+  await rejects(
+    () =>
+      backfillRace({
+        seasonId,
+        track: "SMOKE-TEST bad backfill",
+        scheduledAt: runOn,
+        playerNames: ["Alpha", "Alpha"],
+      }),
+    "a backfill with a duplicate in the order is refused",
+  );
+  await rejects(
+    () =>
+      backfillRace({
+        seasonId,
+        track: "SMOKE-TEST bad backfill",
+        scheduledAt: runOn,
+        playerNames: ["Alpha"],
+        dnfNames: ["Bravo"],
+      }),
+    "a backfilled DNF who is not in the order is refused",
+  );
+
+  console.log("\namending a finished race — a cache is rewritten, not history:");
+  await rejects(
+    () =>
+      amendRaceResult(backfilledId, ["alpha", "bravo"], [], "partial", {
+        source: "manual",
+      }),
+    "a partial amended order is refused",
+  );
+  await rejects(
+    () =>
+      amendRaceResult(
+        backfilledId,
+        ["alpha", "bravo", "charlie", "delta"],
+        [],
+        "stranger",
+        { source: "manual" },
+      ),
+    "a stranger in the amended order is refused",
+  );
+
+  await amendRaceResult(
+    backfilledId,
+    ["alpha", "bravo", "charlie"],
+    [],
+    "Bravo was second, not first",
+    { source: "manual" },
+  );
+  const amended = (await getDoc(raceDoc(backfilledId))).data() as Race;
+  check(
+    "the result cache is rewritten",
+    amended.result?.order.join(",") === "alpha,bravo,charlie",
+    amended.result?.order.join(","),
+  );
+  check(
+    "an amendment can un-retire a car — that is a legitimate correction",
+    amended.result?.dnf.length === 0,
+  );
+  check(
+    "participants follow the new order",
+    ((await getDoc(participantDoc(backfilledId, "alpha"))).data() as Participant)
+      .finalPosition === 1,
+  );
+  const amendedEvents = (
+    await getDocs(collection(db, "races", backfilledId, "events"))
+  ).docs.map((d) => ({ id: d.id, ...d.data() }) as RaceEvent);
+  const amendedTypes = amendedEvents.map((e) => e.type);
+  check(
+    "the original raceFinished is still there, untouched",
+    amendedTypes.filter((t) => t === "raceFinished").length === 1,
+  );
+  check("the amendment is logged", amendedTypes.includes("raceResultAmended"));
+  const correction = amendedEvents.find((e) => e.type === "correction");
+  const originalFinish = amendedEvents.find((e) => e.type === "raceFinished");
+  check(
+    "a correction points at the original finish",
+    correction?.type === "correction" &&
+      correction.targetEventId === originalFinish?.id,
+  );
+  check(
+    "standings follow the amendment, having never been stored",
+    computeStandings(
+      [{ ...amended, id: backfilledId } as Race],
+      DEFAULT_SCORING,
+      seasonId,
+    )[0]?.playerId === "alpha",
+  );
+  await deleteRace(backfilledId);
 
   console.log("\ndeleting the race — which is also the cleanup:");
   await deleteRace(raceId);
@@ -722,7 +1526,42 @@ async function main() {
     "deleting a race that is already gone is refused",
   );
 
+  console.log("\na race that can never be finished is still deletable:");
+  const staleId = await createRace({
+    track: "SMOKE-TEST stale",
+    lapCount: 1,
+    turnSeconds: TURN_SECONDS,
+    playerNames: ["Alpha"],
+    seasonId,
+  });
+  await rejects(
+    () => deleteRace(staleId),
+    "an unfinished race is refused, as it always was",
+  );
+  // What a race predating the positionOrder/roundOrder split looks like. Every
+  // screen that could finish it renders StaleRace, so without the carve-out it
+  // would be undeletable forever.
+  await updateDoc(liveDoc(staleId), { positionOrder: deleteField() });
+  await deleteRace(staleId);
+  check(
+    "...but one with no usable live state is not",
+    !(await getDoc(raceDoc(staleId))).exists(),
+  );
+
+  console.log("\ncleaning up the season:");
+  await deleteSeason(seasonId);
+  check("the season document is gone", !(await getDoc(seasonDoc(seasonId))).exists());
+  check(
+    "its log survives, orphaned by design",
+    (await seasonEvents(seasonId)).length > 0,
+  );
+  await rejects(
+    () => deleteSeason(seasonId),
+    "deleting a season that is already gone is refused",
+  );
+
   console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}`);
+  for (const label of failed) console.log(`  FAIL  ${label}`);
   process.exit(failures === 0 ? 0 : 1);
 }
 

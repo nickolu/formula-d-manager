@@ -5,18 +5,23 @@ import {
   getDoc,
   getDocs,
   increment,
+  limit,
+  query,
   runTransaction,
   serverTimestamp,
+  Timestamp,
   type Transaction,
+  where,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { carStatusSpecFor, gearsFor, playerId as slugFor, startOf } from "./setup";
 import type {
-  EventSource,
+  Actor,
   LiveState,
   Participant,
   PlayerId,
   Race,
+  RaceSettingsChangedEvent,
   RaceSettingsPatchShape,
 } from "./types";
 
@@ -25,11 +30,6 @@ export const liveDoc = (raceId: string) => doc(db, "races", raceId, "state", "li
 export const eventsCol = (raceId: string) => collection(db, "races", raceId, "events");
 export const participantDoc = (raceId: string, playerId: PlayerId) =>
   doc(db, "races", raceId, "participants", playerId);
-
-interface Actor {
-  source: EventSource;
-  actor?: string | null;
-}
 
 /**
  * Every mutation appends to the event log in the same transaction that touches
@@ -59,6 +59,28 @@ async function readRace(tx: Transaction, raceId: string): Promise<Race> {
   const snap = await tx.get(raceDoc(raceId));
   if (!snap.exists()) throw new Error(`No race ${raceId}`);
   return { id: raceId, ...snap.data() } as Race;
+}
+
+/**
+ * Refuses a turn or clock mutation on a race that is over.
+ *
+ * The extra read is **conditional, on purpose**. `advanceTurn` is the hot path
+ * — once per turn, per race — and the decision not to spend a race-doc read
+ * guarding it stands. That decision rested on "no screen offers this on a
+ * finished race", which turned out to be wrong: the player view fell straight
+ * through to the live-race controls once a race was sealed.
+ *
+ * This keeps the original bargain rather than reversing it. A race in progress
+ * always has a `currentPlayerId`, so a normal turn still costs exactly one
+ * document read. Only "nobody's turn" pays for a second one — and that is
+ * precisely the state AGENTS.md warns must not be resolved from the live doc
+ * alone, because it means two different things: the race is over, or it is
+ * between rounds.
+ */
+async function refuseIfOver(tx: Transaction, raceId: string, live: LiveState) {
+  if (live.currentPlayerId) return;
+  const race = await readRace(tx, raceId);
+  if (race.status === "complete") throw new Error("This race is over");
 }
 
 /**
@@ -106,9 +128,16 @@ export async function startRace(raceId: string, who: Actor) {
 
 export interface RaceSettingsPatch {
   track?: string;
+  /** Whose house. An empty string CLEARS it, and the clearing is logged. */
+  location?: string;
   lapCount?: number;
   /** Written to turnDurationDefaultMs; takes effect on the next turn. */
   turnSeconds?: number;
+  /**
+   * When the race was run. Editable because a backfilled date can be typed
+   * wrong, and the season's race order depends on it.
+   */
+  scheduledAt?: Date;
   settings?: RaceSettingsPatchShape;
 }
 
@@ -134,7 +163,9 @@ export async function updateRaceSettings(
 
     // Firestore rejects undefined, and an event carrying keys that did not
     // change would make the log lie about what happened.
-    const applied: RaceSettingsPatch = {};
+    // Typed off the *event*, not off the patch: the caller passes a Date and
+    // the log stores a Timestamp, so they are not the same shape.
+    const applied: RaceSettingsChangedEvent["patch"] = {};
     const raceFields: Record<string, unknown> = {};
 
     if (patch.track !== undefined) {
@@ -143,12 +174,26 @@ export async function updateRaceSettings(
       raceFields.track = track;
       applied.track = track;
     }
+    if (patch.location !== undefined) {
+      // Empty clears it rather than being refused, the same shape as a
+      // participant note: "we wrote down the wrong house" and "we never knew
+      // whose house" are both things that need saying, and clearing it still
+      // appends an event so the log shows it happening.
+      const location = patch.location.trim();
+      raceFields.location = location;
+      applied.location = location;
+    }
     if (patch.lapCount !== undefined) {
       if (!Number.isInteger(patch.lapCount) || patch.lapCount < 1) {
         throw new Error("Laps must be a whole number, at least 1");
       }
       raceFields.lapCount = patch.lapCount;
       applied.lapCount = patch.lapCount;
+    }
+    if (patch.scheduledAt !== undefined) {
+      const at = Timestamp.fromDate(patch.scheduledAt);
+      raceFields.scheduledAt = at;
+      applied.scheduledAt = at;
     }
     if (patch.settings !== undefined) {
       // Dot paths rather than a nested object: writing `settings` whole would
@@ -238,6 +283,16 @@ export async function joinRace(
       throw new Error(`${trimmed} is already racing — claim them from the list`);
     }
 
+    // A caller with a uid is a phone putting its own name in, so that wins.
+    // Otherwise fall back to the season claim, which is how a member added to
+    // the league mid-season arrives already belonging to the right phone. Read
+    // before any write, as every transaction here must.
+    const seasonClaim = uid
+      ? null
+      : (((
+          await tx.get(doc(db, "seasons", race.seasonId, "members", id))
+        ).data()?.claimedBy ?? null) as string | null);
+
     // merge so a returning player's record isn't clobbered, matching createRace.
     tx.set(
       doc(db, "players", id),
@@ -250,7 +305,7 @@ export async function joinRace(
       lapsCompleted: 0,
       finalPosition: null,
       dnf: false,
-      claimedBy: uid ?? null,
+      claimedBy: uid ?? seasonClaim,
     });
     tx.update(liveDoc(raceId), {
       positionOrder: [...live.positionOrder, id],
@@ -343,6 +398,7 @@ function nextRunner(
 export async function advanceTurn(raceId: string, who: Actor) {
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
+    await refuseIfOver(tx, raceId, live);
     if (live.roundOrder.length === 0) throw new Error("Round order is empty");
 
     const retired = new Set(live.retired ?? []);
@@ -422,6 +478,7 @@ export async function advanceTurn(raceId: string, who: Actor) {
 export async function startRound(raceId: string, who: Actor) {
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
+    await refuseIfOver(tx, raceId, live);
     if (live.phase !== "betweenRounds") throw new Error("Not between rounds");
 
     const retired = new Set(live.retired ?? []);
@@ -466,6 +523,7 @@ export async function startRound(raceId: string, who: Actor) {
 export async function rewindTurn(raceId: string, who: Actor) {
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
+    await refuseIfOver(tx, raceId, live);
 
     const retired = new Set(live.retired ?? []);
     const index = live.currentPlayerId
@@ -806,6 +864,7 @@ export async function uncompleteLap(
 export async function pauseTurn(raceId: string, who: Actor) {
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
+    await refuseIfOver(tx, raceId, live);
     if (!live.turnStartedAt) return; // already paused
 
     const elapsed = Date.now() - live.turnStartedAt.toMillis();
@@ -824,6 +883,7 @@ export async function pauseTurn(raceId: string, who: Actor) {
 export async function resumeTurn(raceId: string, who: Actor) {
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
+    await refuseIfOver(tx, raceId, live);
     if (live.turnStartedAt) return; // already running
 
     tx.update(liveDoc(raceId), {
@@ -922,6 +982,100 @@ export async function finishRace(
 }
 
 /**
+ * Rewrites a finished race's result.
+ *
+ * This is the mutation that looks like it breaks the project's central rule, so
+ * here is precisely why it does not. **`result` on the race document is a cache
+ * of the log**, exactly as the live doc is — `finishRace` writes it in the same
+ * transaction that appends `raceFinished`, purely so standings can be a pure
+ * function over the races listener. Rewriting a cache is fine. Rewriting
+ * history is not, and nothing here does: the original `raceFinished` event is
+ * untouched, a `raceResultAmended` event records the new order, and a
+ * `correction` pointing at that original is appended beside it. The history
+ * view shows both, in chronological place.
+ *
+ * Standings recompute on the next snapshot because they were never stored.
+ *
+ * The target event is looked up *before* the transaction, because the web SDK
+ * cannot query a collection inside one. A race that has somehow never had a
+ * raceFinished event gets `targetEventId: ""`, which is a legitimate value
+ * meaning "no specific target" — the same one `uncompleteLap` writes.
+ */
+export async function amendRaceResult(
+  raceId: string,
+  order: PlayerId[],
+  dnf: PlayerId[],
+  note: string,
+  who: Actor,
+) {
+  const finishes = await getDocs(
+    query(eventsCol(raceId), where("type", "==", "raceFinished"), limit(1)),
+  );
+  const targetEventId = finishes.docs[0]?.id ?? "";
+
+  await runTransaction(db, async (tx) => {
+    const race = await readRace(tx, raceId);
+    if (race.status !== "complete" || !race.result) {
+      throw new Error("This race has not been finished yet");
+    }
+
+    // Validated against the sealed result rather than the live doc: the sealed
+    // order is the record of who was actually in this race. A partial order
+    // would silently under-count the season, exactly as it would in finishRace.
+    const expected = new Set(race.result.order);
+    const got = new Set(order);
+    if (got.size !== order.length) {
+      throw new Error("Finishing order contains a duplicate");
+    }
+    for (const playerId of expected) {
+      if (!got.has(playerId)) {
+        throw new Error(`Finishing order is missing ${playerId}`);
+      }
+    }
+    for (const playerId of got) {
+      if (!expected.has(playerId)) {
+        throw new Error(`${playerId} is not in this race`);
+      }
+    }
+    for (const playerId of dnf) {
+      if (!got.has(playerId)) {
+        throw new Error(`DNF ${playerId} is not in the finishing order`);
+      }
+    }
+
+    // Unlike finishRace, retirements are NOT unioned with what is already
+    // there. Un-retiring a car is a legitimate amendment — "we wrote down that
+    // he retired and he did not" is exactly the kind of mistake this exists to
+    // fix — and a union would make it the one correction that cannot be made.
+    tx.update(raceDoc(raceId), { result: { order, dnf } });
+    tx.update(liveDoc(raceId), {
+      positionOrder: order,
+      retired: dnf,
+      updatedAt: serverTimestamp(),
+    });
+
+    order.forEach((playerId, i) => {
+      tx.update(participantDoc(raceId, playerId), {
+        finalPosition: i + 1,
+        dnf: dnf.includes(playerId),
+      });
+    });
+
+    appendEvent(tx, raceId, who, {
+      type: "raceResultAmended",
+      order,
+      dnf,
+      note: note.trim(),
+    });
+    appendEvent(tx, raceId, who, {
+      type: "correction",
+      targetEventId,
+      note: note.trim() || "Result amended",
+    });
+  });
+}
+
+/**
  * Removes a race: its participants, its live state, and the race document.
  *
  * **This is the one mutation here that appends no event** — there would be
@@ -946,7 +1100,17 @@ export async function deleteRace(raceId: string) {
   if (!snap.exists()) throw new Error(`No race ${raceId}`);
   const status = (snap.data() as { status?: string }).status;
   if (status !== "complete") {
-    throw new Error("Finish the race before deleting it");
+    // The "finish it first" rule protects a race people are still playing. A
+    // race whose live doc predates the positionOrder/roundOrder split can never
+    // reach `complete` — every screen that could finish it renders StaleRace
+    // instead — so applying the rule there made it undeletable forever. A race
+    // the app refuses to render is not one anybody is playing.
+    const live = await getDoc(liveDoc(raceId));
+    const unfinishable =
+      !live.exists() || !(live.data() as LiveState).positionOrder;
+    if (!unfinishable) {
+      throw new Error("Finish the race before deleting it");
+    }
   }
 
   const participants = await getDocs(collection(db, "races", raceId, "participants"));

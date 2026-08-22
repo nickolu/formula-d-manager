@@ -23,7 +23,7 @@ export default function ScreenView({ raceId }: { raceId: string }) {
   if (loading) return <Centered>Connecting…</Centered>;
   if (error) return <Centered>Connection error: {error.message}</Centered>;
   if (!live) return <Centered>Race not found.</Centered>;
-  if (!live.positionOrder || !live.roundOrder) return <StaleRace />;
+  if (!live.positionOrder || !live.roundOrder) return <StaleRace raceId={raceId} />;
 
   // Before the flag drops there is no turn and no running clock. Showing the
   // usual layout would read as PAUSED, which is a different thing.

@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useLiveState, useParticipants, usePlayers } from "@/lib/hooks";
+import { useLiveState, useParticipants, usePlayers, useRace } from "@/lib/hooks";
 import {
+  amendRaceResult,
   completeLap,
   finishRace,
   setDnf,
@@ -22,6 +23,7 @@ import StaleRace from "@/app/StaleRace";
  */
 export default function ResultsView({ raceId }: { raceId: string }) {
   const { live, loading } = useLiveState(raceId);
+  const { race } = useRace(raceId);
   const players = usePlayers();
   const participants = useParticipants(raceId);
   const [busy, setBusy] = useState(false);
@@ -36,6 +38,8 @@ export default function ResultsView({ raceId }: { raceId: string }) {
   // first edit and then pins — no effect, and an incoming turn change can't
   // yank the rows out from under a half-finished edit.
   const [draft, setDraft] = useState<PlayerId[] | null>(null);
+  /** Why the sealed result is being changed. Goes into the correction event. */
+  const [amendNote, setAmendNote] = useState("");
   const order = draft ?? live?.positionOrder ?? [];
 
   // Retirement is live state now, not a local checkbox: the player view and
@@ -68,7 +72,7 @@ export default function ResultsView({ raceId }: { raceId: string }) {
 
   if (loading) return <p className="p-8 text-neutral-400">Connecting…</p>;
   if (!live) return <p className="p-8 text-neutral-400">Race not found.</p>;
-  if (!live.positionOrder) return <StaleRace />;
+  if (!live.positionOrder) return <StaleRace raceId={raceId} />;
 
   return (
     <main className="mx-auto flex w-full max-w-xl flex-col gap-6 p-6">
@@ -213,17 +217,55 @@ export default function ResultsView({ raceId }: { raceId: string }) {
           Save standings
         </button>
 
-        <button
-          disabled={busy}
-          onClick={() =>
-            run("Race finished", () =>
-              finishRace(raceId, order, [...retired], { source: "manual" }),
-            )
-          }
-          className="rounded border border-red-800 py-3 text-red-400 disabled:opacity-50"
-        >
-          Finish race — locks in this order as the result
-        </button>
+        {race?.status === "complete" ? (
+          // The sealed race gets a different verb. `result` is a cache of the
+          // log, so rewriting it is legitimate — but it is not the same act as
+          // finishing, and the log records it as an amendment plus a correction
+          // pointing at the original raceFinished.
+          <div className="flex flex-col gap-2 rounded border border-neutral-800 p-3">
+            <p className="text-sm text-neutral-400">
+              This race is finished. Changing the order here amends the result
+              and rewrites the season table. The original finish stays in the
+              history.
+            </p>
+            <input
+              value={amendNote}
+              onChange={(e) => setAmendNote(e.target.value)}
+              placeholder="What was wrong? (goes in the log)"
+              className="w-full rounded border border-neutral-800 bg-transparent p-3"
+            />
+            <button
+              disabled={busy}
+              onClick={() =>
+                run("Result amended", async () => {
+                  await amendRaceResult(
+                    raceId,
+                    order,
+                    [...retired],
+                    amendNote,
+                    { source: "manual" },
+                  );
+                  setAmendNote("");
+                })
+              }
+              className="rounded border border-amber-800 py-3 text-amber-400 disabled:opacity-50"
+            >
+              Amend result
+            </button>
+          </div>
+        ) : (
+          <button
+            disabled={busy}
+            onClick={() =>
+              run("Race finished", () =>
+                finishRace(raceId, order, [...retired], { source: "manual" }),
+              )
+            }
+            className="rounded border border-red-800 py-3 text-red-400 disabled:opacity-50"
+          >
+            Finish race — locks in this order as the result
+          </button>
+        )}
       </div>
 
       {status && <p className="text-center text-sm text-neutral-400">{status}</p>}

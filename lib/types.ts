@@ -18,7 +18,72 @@ export interface ScoringConfig {
   positionPoints: number[];
   /** Awarded to anyone finishing past the end of positionPoints. */
   pointsBeyondTable: number;
-  dnfPoints: number;
+}
+
+/**
+ * There is deliberately no `dnfPoints`. A retirement scores its placing like
+ * anyone else's — the finishing order already encodes who broke and when, so
+ * the first car out is placed last, the next above it, and so on. A separate
+ * DNF value would score that same fact a second time and let a flag override a
+ * placing. Seasons written before this carry a stray `dnfPoints` in Firestore;
+ * nothing reads it, and there is no migration, as usual.
+ */
+
+/** One colour a team can wear. Keys are stable ids, never reused for a different colour. */
+export interface TeamColor {
+  key: string;
+  label: string;
+  hex: string;
+}
+
+/**
+ * Teams, configured per season in Firestore rather than in code — the same
+ * precedent as `scoringConfig` and the car status spec. Absent means teams are
+ * off, so a season created before teams existed is untouched.
+ */
+export interface TeamConfig {
+  enabled: boolean;
+  /**
+   * Racers per team. The house rule is that every team is exactly this size,
+   * but **nothing enforces it** — that is a season-wide invariant and a
+   * transaction cannot check it without a query. It is surfaced in the UI
+   * instead. Configurable because 2 today does not mean 2 forever.
+   */
+  teamSize: number;
+  /**
+   * Whether players may create, rename, recolour, join and leave. Not security
+   * — there is no auth to enforce it with. What `lib/` does enforce is the soft
+   * check that actually works at a table: a player may edit the team they are
+   * on. Do not mistake this for a permission.
+   */
+  playerManaged: boolean;
+  /** Config, not code: house palettes churn. Seeded from DEFAULT_TEAM_PALETTE. */
+  palette: TeamColor[];
+  /**
+   * How member points make a team score. Kept even though with equal full teams
+   * `average` is `sum ÷ teamSize` — a monotone transform with an identical
+   * ranking. One field and one branch, and the only case where it matters is
+   * the one the house rule forbids and someone will eventually allow.
+   */
+  scoring?: "sum" | "average";
+}
+
+/**
+ * A constructor, for one season.
+ *
+ * `members` is the **capacity authority**: "is there an open slot" is
+ * `members.length < teamSize`, answerable from one document read. The matching
+ * `SeasonMember.teamId` is the **exclusivity authority**. Both are written in
+ * the same transaction — the web SDK cannot query a collection inside one, so
+ * each cross-document invariant has to live in a document the transaction can
+ * read. Same bargain as `retired` on the live doc.
+ */
+export interface Team {
+  id: string;
+  name: string;
+  colorKey: string;
+  members: PlayerId[];
+  createdAt: Timestamp;
 }
 
 export interface Season {
@@ -26,6 +91,26 @@ export interface Season {
   name: string;
   scoringConfig: ScoringConfig;
   startDate: Timestamp;
+  /** Absent means teams are off — the same "absent means off" rule as RaceSettings. */
+  teamConfig?: TeamConfig;
+  /**
+   * Which palette colours are taken, and by whom: `{ ferrari: "team_abc" }`.
+   *
+   * "No two teams share a colour" spans every team in the season, which a
+   * transaction cannot query — so the answer is denormalized onto the one
+   * document every colour-changing transaction already reads. Written by **dot
+   * path**, never as a whole map: writing it whole would clobber a colour
+   * claimed a second earlier, exactly the reason `settings` toggles are written
+   * by dot path. Released with `deleteField()`.
+   */
+  teamColors?: Record<string, string>;
+  /**
+   * Absent means active — the usual "absent is meaningful" rule, so seasons
+   * created before archiving existed need no migration. An archived season
+   * drops out of pickers and keeps its standings reachable: a finished season
+   * is history, not rubbish.
+   */
+  archived?: boolean;
 }
 
 /**
@@ -101,12 +186,36 @@ export interface Race {
   id: string;
   seasonId: string;
   track: string;
+  /**
+   * Whose house it was played at.
+   *
+   * Optional, and absent means nobody recorded one — the usual rule, so races
+   * created before the field existed still render. Free text rather than a
+   * reference to a player: the venue is often "Nick's" but it is just as often
+   * "the pub" or "Sarah's parents'", and modelling it as a player would make
+   * the second case unsayable.
+   */
+  location?: string;
+  /**
+   * When it was played, or when it is going to be. Settable rather than always
+   * the moment of creation — a race entered after the fact would otherwise
+   * sort to today and scramble the season's order.
+   */
   scheduledAt: Timestamp;
   status: RaceStatus;
   /** Laps required to finish. Each lap spans many rounds. */
   lapCount: number;
   /** Absent on races created before toggles existed; absent means off. */
   settings?: RaceSettings;
+  /**
+   * True for a race entered after the fact, that the app never timed.
+   *
+   * A cache flag, so a view can say "entered afterwards" — deliberately NOT a
+   * new event variant. `backfillRace` writes an ordinary `raceCreated` followed
+   * by an ordinary `raceFinished`, so replaying the log produces the right
+   * state with no new logic anywhere.
+   */
+  backfilled?: boolean;
   /** Present only once the race is complete. Absent on live/scheduled races. */
   result?: RaceResult;
 }
@@ -126,6 +235,21 @@ export interface SeasonStanding {
   bestFinish: number | null;
   /** Count of finishes by position, index 0 = wins. Used for tie countback. */
   finishCounts: number[];
+}
+
+/**
+ * One row of derived constructor standings. Never stored, exactly like
+ * SeasonStanding — a team change re-derives the whole season on the next render.
+ */
+export interface TeamStanding {
+  teamId: string;
+  points: number;
+  /** Sum of the members' finishCounts, so the existing countback works unchanged. */
+  finishCounts: number[];
+  memberIds: PlayerId[];
+  /** Race entries across the whole team — two members in one race counts twice. */
+  races: number;
+  wins: number;
 }
 
 export interface Participant {
@@ -256,6 +380,21 @@ export interface LiveState {
 
 export type EventSource = "manual" | "chat" | "system";
 
+/**
+ * Who is making a change. Every mutation in `lib/` takes one, so a
+ * chat-entered mistake stays traceable to the chatbot rather than looking like
+ * something someone tapped.
+ */
+export interface Actor {
+  source: EventSource;
+  actor?: string | null;
+}
+
+/**
+ * Shared by both append-only logs — the race log and the season log. They have
+ * the same shape on purpose: `source` and `actor` answer "who said so" the same
+ * way whichever log you are reading, and one shape means one set of rules.
+ */
 interface BaseEvent {
   id: string;
   /**
@@ -274,6 +413,8 @@ interface BaseEvent {
 export interface RaceCreatedEvent extends BaseEvent {
   type: "raceCreated";
   track: string;
+  /** Absent on races created before the field existed, and when none was given. */
+  location?: string;
   lapCount: number;
   order: PlayerId[];
   turnDurationMs: number;
@@ -363,8 +504,12 @@ export interface RaceSettingsChangedEvent extends BaseEvent {
   type: "raceSettingsChanged";
   patch: {
     track?: string;
+    /** An empty string is a clearing, and is logged as one. */
+    location?: string;
     lapCount?: number;
     turnSeconds?: number;
+    /** When the race was run. Editable because a backfilled date can be wrong. */
+    scheduledAt?: Timestamp;
     settings?: RaceSettingsPatchShape;
   };
 }
@@ -452,6 +597,23 @@ export interface RaceFinishedEvent extends BaseEvent {
 }
 
 /**
+ * A finished race's result was rewritten.
+ *
+ * This does not break "corrections append, they never mutate", and the reason
+ * is worth stating: `result` on the race document is a **cache of the log**,
+ * exactly as the live doc is. Rewriting a cache is fine; rewriting history is
+ * not. The original raceFinished event is untouched, this event records the new
+ * order, and a `correction` pointing at that raceFinished is appended beside it
+ * — so the history view shows both, in chronological place.
+ */
+export interface RaceResultAmendedEvent extends BaseEvent {
+  type: "raceResultAmended";
+  order: PlayerId[];
+  dnf: PlayerId[];
+  note: string;
+}
+
+/**
  * Corrections append rather than mutate, so the audit trail survives and a bad
  * transcription is one undo instead of a corrupted race.
  */
@@ -482,4 +644,179 @@ export type RaceEvent =
   | TurnPausedEvent
   | TurnResumedEvent
   | RaceFinishedEvent
+  | RaceResultAmendedEvent
   | CorrectionEvent;
+
+/**
+ * One racer in a league, for one season.
+ *
+ * A subcollection under the season rather than an array on the season document:
+ * a member carries fields, and item 17's transactions have to read *one* member
+ * without reading the whole league.
+ *
+ * This is NOT the grid. Membership answers "who is in this league"; the grid
+ * answers "who is at the table tonight, and in what order". Someone missing a
+ * game night is not leaving the season, so a member with no entry in a race
+ * scores *nothing* — which is distinct from a DNF, and stays distinct the first
+ * time somebody argues that a DNF should be worth a point.
+ *
+ * `players/{id}` stays global and is what it should always have been: the
+ * human's name, stable across seasons.
+ */
+export interface SeasonMember {
+  playerId: PlayerId;
+  joinedAt: Timestamp;
+  /**
+   * Mirror of `teams/{teamId}.members` — the *exclusivity* authority, so "am I
+   * already on a team" is one field a transaction can read. Item 17 populates
+   * it; the type is declared now so there is one shape to write against.
+   */
+  teamId?: string | null;
+  /**
+   * The uid that claims this racer for the whole season, so a phone claims once
+   * instead of every game night. `participants/{id}.claimedBy` stays the
+   * in-race truth. Item 15 populates it.
+   */
+  claimedBy?: string | null;
+}
+
+/** Someone joined the league for this season. */
+export interface MemberAddedEvent extends BaseEvent {
+  type: "memberAdded";
+  playerId: PlayerId;
+  name: string;
+}
+
+/** Someone left the league. Their finished races keep their results. */
+export interface MemberRemovedEvent extends BaseEvent {
+  type: "memberRemoved";
+  playerId: PlayerId;
+}
+
+/**
+ * A patch of season configuration, one level deep. Same shape as the argument
+ * to `updateSeason`, so the event carries exactly what the caller asked for.
+ */
+export interface SeasonSettingsPatchShape {
+  name?: string;
+  scoringConfig?: ScoringConfig;
+  archived?: boolean;
+  teamConfig?: TeamConfigPatchShape;
+}
+
+/**
+ * A partial edit of TeamConfig, written by dot path so switching teams on does
+ * not require restating the palette beside it.
+ */
+export interface TeamConfigPatchShape {
+  enabled?: boolean;
+  teamSize?: number;
+  playerManaged?: boolean;
+  palette?: TeamColor[];
+  scoring?: "sum" | "average";
+}
+
+/** Seeds the season log the way raceCreated seeds a race's. */
+export interface SeasonCreatedEvent extends BaseEvent {
+  type: "seasonCreated";
+  name: string;
+}
+
+/**
+ * A change to how the season is configured, carrying only the fields that were
+ * actually set — the log reads as a diff, exactly like raceSettingsChanged.
+ */
+export interface SeasonSettingsChangedEvent extends BaseEvent {
+  type: "seasonSettingsChanged";
+  patch: SeasonSettingsPatchShape;
+}
+
+/**
+ * A phone claimed a racer for the whole season, so it does not have to claim
+ * again every game night. The in-race claim stays authoritative.
+ */
+export interface SeasonRacerClaimedEvent extends BaseEvent {
+  type: "seasonRacerClaimed";
+  playerId: PlayerId;
+  uid: string;
+}
+
+/** A phone gave a season claim back. */
+export interface SeasonRacerReleasedEvent extends BaseEvent {
+  type: "seasonRacerReleased";
+  playerId: PlayerId;
+  uid: string;
+}
+
+/** A constructor was created. */
+export interface TeamCreatedEvent extends BaseEvent {
+  type: "teamCreated";
+  teamId: string;
+  name: string;
+  colorKey: string;
+}
+
+export interface TeamRenamedEvent extends BaseEvent {
+  type: "teamRenamed";
+  teamId: string;
+  name: string;
+}
+
+export interface TeamRecolouredEvent extends BaseEvent {
+  type: "teamRecoloured";
+  teamId: string;
+  colorKey: string;
+}
+
+export interface TeamDeletedEvent extends BaseEvent {
+  type: "teamDeleted";
+  teamId: string;
+  name: string;
+}
+
+/**
+ * A racer joined a team.
+ *
+ * Under the house rule that nobody switches teams during a season, a change
+ * here is not a transfer — it is a **correction of a recording error**, and it
+ * silently re-derives the whole season's team standings. This log is the only
+ * thing that records the change happened at all.
+ */
+export interface TeamJoinedEvent extends BaseEvent {
+  type: "teamJoined";
+  teamId: string;
+  playerId: PlayerId;
+}
+
+export interface TeamLeftEvent extends BaseEvent {
+  type: "teamLeft";
+  teamId: string;
+  playerId: PlayerId;
+}
+
+/**
+ * The season's append-only log, under `seasons/{id}/events`.
+ *
+ * It ships before anything reads it, and that is deliberate. Nothing replays
+ * this log the way the race log can be replayed, and Phase 3's chatbot does not
+ * write to it — it earns its place on one narrow ground: from item 17 on, a
+ * team move silently re-derives the whole season's team standings, and this is
+ * the only thing that will record that the move happened. Unrecoverable after
+ * the fact, trivial to write now.
+ *
+ * Items 14 and 17 extend this union with their own variants. There is
+ * deliberately no history view yet.
+ */
+export type SeasonEvent =
+  | SeasonCreatedEvent
+  | SeasonSettingsChangedEvent
+  | MemberAddedEvent
+  | MemberRemovedEvent
+  | SeasonRacerClaimedEvent
+  | SeasonRacerReleasedEvent
+  | TeamCreatedEvent
+  | TeamRenamedEvent
+  | TeamRecolouredEvent
+  | TeamDeletedEvent
+  | TeamJoinedEvent
+  | TeamLeftEvent;

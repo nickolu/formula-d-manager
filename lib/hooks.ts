@@ -1,12 +1,26 @@
 "use client";
 
 import { getAuth, onAuthStateChanged } from "firebase/auth";
-import { collection, doc, limit, onSnapshot, orderBy, query } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  where,
+} from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import { app, db } from "./firebase";
 import { liveDoc } from "./race";
-import { computeStandings } from "./scoring";
-import { seasonDoc } from "./seasons";
+import { computeStandings, computeTeamStandings, isScorable } from "./scoring";
+import {
+  seasonDoc,
+  seasonEventsCol,
+  seasonMembersCol,
+  seasonsCol,
+} from "./seasons";
+import { teamsCol } from "./teams";
 import type {
   LiveState,
   Participant,
@@ -15,6 +29,9 @@ import type {
   Race,
   RaceEvent,
   Season,
+  SeasonEvent,
+  SeasonMember,
+  Team,
 } from "./types";
 
 /**
@@ -89,24 +106,34 @@ export function useParticipants(raceId: string) {
  * a slow connection reads "no race yet" for a moment before their race appears
  * — which is exactly the wrong thing to tell someone who came to play.
  */
-export function useRaceList() {
+export function useRaceList(seasonId?: string) {
   const [races, setRaces] = useState<Race[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const q = query(collection(db, "races"), orderBy("scheduledAt", "desc"));
+    // Scoped when a season is given — which needs the composite index on
+    // (seasonId ASC, scheduledAt DESC) in firestore.indexes.json. Without the
+    // index this fails at the table rather than at build time, which is why
+    // the index ships before anything depends on it.
+    const q = seasonId
+      ? query(
+          collection(db, "races"),
+          where("seasonId", "==", seasonId),
+          orderBy("scheduledAt", "desc"),
+        )
+      : query(collection(db, "races"), orderBy("scheduledAt", "desc"));
     const unsubscribe = onSnapshot(q, (snap) => {
       setRaces(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Race));
       setLoading(false);
     });
     return unsubscribe;
-  }, []);
+  }, [seasonId]);
 
   return { races, loading };
 }
 
-export function useRaces() {
-  return useRaceList().races;
+export function useRaces(seasonId?: string) {
+  return useRaceList(seasonId).races;
 }
 
 /**
@@ -165,11 +192,15 @@ export function useRaceEvents(raceId: string, max = 300) {
  * Scoring config is read live rather than bundled, so house rules can be edited
  * in the Firestore console and every open standings page re-sorts immediately.
  */
-export function useSeason(seasonId: string) {
+export function useSeason(seasonId: string | null | undefined) {
   const [season, setSeason] = useState<Season | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Hooks cannot be called conditionally, so a caller that does not yet know
+    // which season it wants passes nothing rather than an empty id — which
+    // Firestore rejects as a document path.
+    if (!seasonId) return;
     const unsubscribe = onSnapshot(seasonDoc(seasonId), (snap) => {
       setSeason(snap.exists() ? ({ id: snap.id, ...snap.data() } as Season) : null);
       setLoading(false);
@@ -181,19 +212,180 @@ export function useSeason(seasonId: string) {
 }
 
 /**
+ * Every season, newest first. One listener — the league has a handful of these
+ * and they change about once a year.
+ *
+ * Archived seasons are included: a picker filters them out, and a standings
+ * page still has to be able to name the season it is showing.
+ */
+export function useSeasons() {
+  const [seasons, setSeasons] = useState<Season[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const q = query(seasonsCol(), orderBy("startDate", "desc"));
+    const unsubscribe = onSnapshot(q, (snap) => {
+      setSeasons(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Season));
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, []);
+
+  return { seasons, loading };
+}
+
+/**
+ * The season's constructors. One listener; the picker and the slot grid both
+ * read it, and the taken-colours map comes from the season document they are
+ * already streaming, so no extra listener is needed for that either.
+ */
+export function useTeams(seasonId: string | null | undefined) {
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!seasonId) return;
+    const unsubscribe = onSnapshot(teamsCol(seasonId), (snap) => {
+      setTeams(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Team));
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, [seasonId]);
+
+  return { teams, loading };
+}
+
+/**
+ * The season the app is "in" right now: the newest one that has not been
+ * archived.
+ *
+ * Derived rather than flagged, so there is nothing to forget to set — a new
+ * season becomes current by existing, and an old one stops being current by
+ * being archived. If the commissioner ever wants to pin it, a
+ * `seasons/{id}.current` flag read here is the change, and nothing else moves.
+ *
+ * Note what this does NOT do: `/` is not gated behind it. The root is still a
+ * list of races with the season named in the header and a switcher beside it,
+ * because the root must not behave differently week to week.
+ */
+export function useCurrentSeason() {
+  const { seasons, loading } = useSeasons();
+  const season = useMemo(
+    () => seasons.find((s) => !s.archived) ?? null,
+    [seasons],
+  );
+  return { season, seasons, loading };
+}
+
+/**
+ * Who is in the league this season.
+ *
+ * This is NOT the grid. It answers "who is in this league", while the live
+ * doc's positionOrder answers "who is at the table tonight, and in what order".
+ * Someone missing a game night stays a member — which is why they still appear
+ * in standings, on zero, rather than being written into a race they did not run.
+ */
+export function useSeasonMembers(seasonId: string | null | undefined) {
+  const [members, setMembers] = useState<SeasonMember[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // A caller that does not know its season yet passes nothing rather than an
+    // empty id, which Firestore rejects as a collection path.
+    if (!seasonId) return;
+    const unsubscribe = onSnapshot(seasonMembersCol(seasonId), (snap) => {
+      setMembers(snap.docs.map((d) => d.data() as SeasonMember));
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, [seasonId]);
+
+  return { members, loading };
+}
+
+/**
+ * The season's event log, newest first, shaped exactly like useRaceEvents.
+ *
+ * Nothing renders this yet, on purpose: the log ships before its view because
+ * a team move is otherwise unrecoverable, while the view is cheap to add later.
+ * `at` is null until the server acknowledges, same as every race event.
+ */
+export function useSeasonEvents(seasonId: string, max = 300) {
+  const [events, setEvents] = useState<SeasonEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const q = query(seasonEventsCol(seasonId), orderBy("at", "desc"), limit(max));
+    const unsubscribe = onSnapshot(q, (snap) => {
+      setEvents(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as SeasonEvent));
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, [seasonId, max]);
+
+  return { events, loading };
+}
+
+/**
  * Standings are derived, never stored. Both inputs are already streaming, so
  * this adds no reads and cannot drift from the races it summarizes.
  */
 export function useStandings(seasonId: string) {
-  const races = useRaces();
+  const races = useRaces(seasonId);
   const { season, loading } = useSeason(seasonId);
+  const { members } = useSeasonMembers(seasonId);
+
+  // The roster is an input to scoring, not a thing written into races: a member
+  // who missed a night appears on zero because computeStandings seeded them,
+  // and the race's result still records exactly who was on the grid.
+  const memberIds = useMemo(() => members.map((m) => m.playerId), [members]);
 
   const standings = useMemo(
-    () => (season ? computeStandings(races, season.scoringConfig, seasonId) : []),
-    [races, season, seasonId],
+    () =>
+      season
+        ? computeStandings(races, season.scoringConfig, seasonId, memberIds)
+        : [],
+    [races, season, seasonId, memberIds],
   );
 
-  return { standings, season, loading };
+  // How many races have actually been run. The standings row's `races` column
+  // means *races entered*, and a 0 against a season with seven races run reads
+  // very differently from a 0 in a season that has not started — so the view
+  // gets both numbers, and "absent" never has to be inferred.
+  const racesRun = useMemo(() => races.filter(isScorable).length, [races]);
+
+  return { standings, season, loading, racesRun };
+}
+
+/**
+ * Constructor standings, derived exactly the way driver standings are: a pure
+ * function of listeners that are already open, so it costs no extra reads and
+ * cannot drift from the races it summarizes.
+ *
+ * A team move re-derives the whole season here, on the next snapshot, and that
+ * is the intended behaviour — under the house rule that nobody switches teams,
+ * a move is a correction of a recording error rather than a transfer.
+ */
+export function useTeamStandings(seasonId: string) {
+  const races = useRaces(seasonId);
+  const { season, loading } = useSeason(seasonId);
+  const { teams } = useTeams(seasonId);
+
+  const teamStandings = useMemo(
+    () =>
+      season
+        ? computeTeamStandings(
+            races,
+            season.scoringConfig,
+            teams,
+            season.teamConfig,
+            seasonId,
+          )
+        : [],
+    [races, season, teams, seasonId],
+  );
+
+  return { teamStandings, teams, season, loading };
 }
 
 /**

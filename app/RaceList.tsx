@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useRaceList } from "@/lib/hooks";
-import type { Race } from "@/lib/types";
+import { usePlayers, useRaceList, useSeason, useTeams } from "@/lib/hooks";
+import { topTeamOf } from "@/lib/scoring";
+import { teamConfigFor } from "@/lib/teams";
+import type { PlayerId, Race, RaceStatus, Team } from "@/lib/types";
 
 /**
  * One component, two renderings — not two components. `useRaceList`, the
@@ -15,23 +17,37 @@ export type RaceListVariant = "player" | "admin";
 
 export default function RaceList({
   variant = "admin",
+  seasonId,
 }: {
   variant?: RaceListVariant;
+  /** Scopes the listener to one season. Absent lists every race, which is what
+   *  the player landing wants: `/` is a list of races, not a season picker. */
+  seasonId?: string;
 }) {
-  const { races, loading } = useRaceList();
+  const { races, loading } = useRaceList(seasonId);
+  // One listener for both variants. Both rows name the winner of a finished
+  // race, which is the only thing here that needs a player's display name.
+  const players = usePlayers();
+  const nameOf = (id: PlayerId) => players.get(id)?.displayName ?? id;
+  // For "top team" on a finished race. Both are documents these pages already
+  // stream elsewhere, and teamConfigFor resolves a season with teams off.
+  const { season } = useSeason(seasonId);
+  const { teams } = useTeams(seasonId);
+  const topTeam = (race: Race) =>
+    season && teamConfigFor(season).enabled
+      ? topTeamOf(race, season.scoringConfig, teams)
+      : null;
 
   if (variant === "admin") {
-    if (races.length === 0) return null;
-    return (
-      <section className="mt-12">
-        <h2 className="text-xl font-medium">Races</h2>
-        <ul className="mt-4 flex flex-col gap-2">
-          {races.map((race) => (
-            <AdminRow key={race.id} race={race} />
-          ))}
-        </ul>
-      </section>
-    );
+    if (loading) return <p className="text-neutral-500">Loading races…</p>;
+    if (races.length === 0) {
+      return (
+        <p className="rounded border border-neutral-800 p-4 text-sm text-neutral-400">
+          No races in this season yet.
+        </p>
+      );
+    }
+    return <AdminRows races={races} nameOf={nameOf} topTeam={topTeam} />;
   }
 
   if (loading) {
@@ -56,7 +72,12 @@ export default function RaceList({
       {current.length > 0 ? (
         <ul className="flex flex-col gap-3">
           {current.map((race) => (
-            <PlayerRow key={race.id} race={race} />
+            <PlayerRow
+              key={race.id}
+              race={race}
+              nameOf={nameOf}
+              topTeam={topTeam(race)}
+            />
           ))}
         </ul>
       ) : (
@@ -74,7 +95,13 @@ export default function RaceList({
           </summary>
           <ul className="flex flex-col gap-2 p-3 pt-0">
             {past.map((race) => (
-              <PlayerRow key={race.id} race={race} muted />
+              <PlayerRow
+                key={race.id}
+                race={race}
+                nameOf={nameOf}
+                topTeam={topTeam(race)}
+                muted
+              />
             ))}
           </ul>
         </details>
@@ -84,39 +111,128 @@ export default function RaceList({
 }
 
 /**
+ * What a race document already knows, as a line of prose.
+ *
+ * Shared by both rows so they cannot drift. Deliberately no round number and no
+ * whose-turn-it-is: those live in the live doc, and showing them would mean a
+ * listener per race on pages that open one. Everything here — the date, the
+ * venue, the laps, the winner, the retirement count — is on the race document
+ * the list is already streaming, because `result` is the finishing-order cache
+ * `finishRace` writes.
+ */
+function raceFacts(
+  race: Race,
+  nameOf: (id: PlayerId) => string,
+  topTeam: Team | null,
+): string {
+  // Null until the server acknowledges a just-created race: scheduledAt is a
+  // serverTimestamp and the persistent cache surfaces the write first.
+  const when = race.scheduledAt?.toDate?.();
+
+  // Deliberately silent about `backfilled`. The flag still records that the app
+  // never timed this race — that is unrecoverable otherwise — but at the table
+  // nobody is telling those two kinds of race apart, and a row that says so is
+  // one more thing to read past.
+  return [
+    // Bare, with no "on" or "scheduled for": the badge beside it already says
+    // whether this date is a plan or a record.
+    when ? formatDate(when) : null,
+    race.location ? `at ${race.location}` : null,
+    `${race.lapCount} ${race.lapCount === 1 ? "lap" : "laps"}`,
+    race.result?.order[0] ? `won by ${nameOf(race.result.order[0])}` : null,
+    topTeam ? `top team ${topTeam.name}` : null,
+    race.result?.dnf.length ? `${race.result.dnf.length} DNF` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/**
  * Deliberately no auto-redirect when exactly one race is live: it would save a
  * tap but make the site root behave differently week to week, and it would
  * strand anyone trying to reach a finished race. The live race is just the
  * obvious target instead.
  */
-function PlayerRow({ race, muted = false }: { race: Race; muted?: boolean }) {
+function PlayerRow({
+  race,
+  nameOf,
+  topTeam,
+  muted = false,
+}: {
+  race: Race;
+  nameOf: (id: PlayerId) => string;
+  topTeam: Team | null;
+  muted?: boolean;
+}) {
   return (
     <li>
       <Link
         href={`/race/${race.id}/player`}
-        className={`flex min-h-16 items-center justify-between gap-3 rounded-2xl border p-4 text-lg active:bg-neutral-800 ${
+        className={`flex min-h-16 items-center justify-between gap-3 rounded-2xl border p-4 active:bg-neutral-800 ${
           muted
             ? "border-neutral-800 text-neutral-400"
             : "border-emerald-800 bg-emerald-950/30"
         }`}
       >
-        <span className="font-medium">{race.track}</span>
-        <span className="shrink-0 text-sm text-neutral-500">
-          {race.status === "complete" ? "finished" : race.status}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-lg font-medium">{race.track}</span>
+          {/* Which night this was, whose house, and how it went — what someone
+              scanning the list is actually telling two race nights apart by.
+              Without it a race that has not started yet reads as nothing but
+              the word "scheduled". */}
+          <span className="mt-0.5 block truncate text-sm text-neutral-500">
+            {raceFacts(race, nameOf, topTeam)}
+          </span>
         </span>
+        <StateBadge status={race.status} />
       </Link>
     </li>
   );
 }
 
-function AdminRow({ race }: { race: Race }) {
+/** The commissioner's rows: the same facts, plus a state badge and the links. */
+function AdminRows({
+  races,
+  nameOf,
+  topTeam,
+}: {
+  races: Race[];
+  nameOf: (id: PlayerId) => string;
+  topTeam: (race: Race) => Team | null;
+}) {
   return (
-    <li className="flex flex-wrap items-center justify-between gap-2 rounded border border-neutral-800 p-3">
-      <span>
-        {race.track}
-        <span className="ml-2 text-sm text-neutral-500">{race.status}</span>
-      </span>
-      <span className="flex gap-4 text-sm">
+    <ul className="flex flex-col gap-2">
+      {races.map((race) => (
+        <AdminRow
+          key={race.id}
+          race={race}
+          nameOf={nameOf}
+          topTeam={topTeam(race)}
+        />
+      ))}
+    </ul>
+  );
+}
+
+function AdminRow({
+  race,
+  nameOf,
+  topTeam,
+}: {
+  race: Race;
+  nameOf: (id: PlayerId) => string;
+  topTeam: Team | null;
+}) {
+  return (
+    <li className="rounded border border-neutral-800 p-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <StateBadge status={race.status} />
+        <span className="min-w-0 flex-1 truncate font-medium">{race.track}</span>
+      </div>
+
+      <p className="mt-1 text-sm text-neutral-500">{raceFacts(race, nameOf, topTeam)}</p>
+
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
         <Link href={`/race/${race.id}/player`} className="text-emerald-500">
           player
         </Link>
@@ -124,12 +240,43 @@ function AdminRow({ race }: { race: Race }) {
           screen
         </Link>
         <Link href={`/race/${race.id}/results`} className="text-emerald-500">
-          results
+          {race.status === "complete" ? "edit result" : "results"}
         </Link>
         <Link href={`/race/${race.id}/settings`} className="text-emerald-500">
           settings
         </Link>
-      </span>
+      </div>
     </li>
   );
+}
+
+/**
+ * The three states, said in words rather than only in colour — a badge that
+ * relies on hue alone is unreadable to anyone who cannot rely on hue.
+ */
+function StateBadge({ status }: { status: RaceStatus }) {
+  const style =
+    status === "live"
+      ? "border-emerald-700 bg-emerald-950/50 text-emerald-300"
+      : status === "scheduled"
+        ? "border-amber-800 bg-amber-950/30 text-amber-300"
+        : "border-neutral-800 text-neutral-500";
+
+  return (
+    <span
+      className={`shrink-0 rounded border px-2 py-0.5 text-xs uppercase tracking-wide ${style}`}
+    >
+      {status === "complete" ? "finished" : status}
+    </span>
+  );
+}
+
+/** Year only when it is not this one — on a league page it is usually noise. */
+function formatDate(date: Date) {
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
 }

@@ -7,6 +7,7 @@ import {
   useParticipants,
   usePlayers,
   useRace,
+  useSeasonMembers,
   useUid,
 } from "@/lib/hooks";
 import {
@@ -16,8 +17,14 @@ import {
   setCarStatus,
   setGear,
 } from "@/lib/race";
+import {
+  addSeasonMember,
+  claimSeasonRacer,
+  releaseSeasonRacer,
+} from "@/lib/seasons";
 import { carStatusSpecFor, gearsFor } from "@/lib/setup";
 import type { PlayerId } from "@/lib/types";
+import TeamPanel from "@/app/TeamPanel";
 import RacerOverview from "./RacerOverview";
 
 /**
@@ -34,6 +41,7 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
   const { race } = useRace(raceId);
   const participants = useParticipants(raceId);
   const players = usePlayers();
+  const { members } = useSeasonMembers(race?.seasonId);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +68,23 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
     }
   }
 
+  /**
+   * The season claim is a **default for the next race, not a second source of
+   * truth** — participants/{id}.claimedBy is what "my racer" is derived from,
+   * and it has already been written by the time this runs. So a failure here is
+   * swallowed: the player's tap worked, and telling them "someone else has that
+   * racer" when the racer is visibly theirs would be a lie about what happened.
+   * The worst case is that next week's race seeds nothing and they tap again.
+   */
+  async function rememberForSeason(action: () => Promise<void>) {
+    if (!race?.seasonId) return;
+    try {
+      await action();
+    } catch {
+      // Deliberately silent — see above.
+    }
+  }
+
   async function run(action: () => Promise<void>, dismiss = true) {
     setBusy(true);
     setError(null);
@@ -83,9 +108,34 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
   const nameOf = (id: PlayerId) => players.get(id)?.displayName ?? id;
 
   // Old races have no claimedBy anywhere, so everything is simply unclaimed.
-  const mine = uid
+  const claimedHere = uid
     ? order.find((id) => participants.get(id)?.claimedBy === uid)
     : undefined;
+
+  /**
+   * The racer this device holds for the season, used only when nothing is
+   * claimed in this race.
+   *
+   * `createRace` and `joinRace` seed the participant from the season claim, but
+   * a race that already existed when you picked has nothing seeded — and this
+   * screen would then ask you to pick again, which is exactly the thing picking
+   * at the season level was supposed to stop.
+   *
+   * Derived, not written: nothing claims on render. And only when that
+   * participant is **unclaimed here** — if another phone has taken them in this
+   * race, the in-race claim wins, which is the whole point of it being
+   * authoritative and re-tappable.
+   */
+  const seasonRacer = uid
+    ? (members.find((m) => m.claimedBy === uid)?.playerId ?? null)
+    : null;
+  const mine =
+    claimedHere ??
+    (seasonRacer &&
+    order.includes(seasonRacer) &&
+    !participants.get(seasonRacer)?.claimedBy
+      ? seasonRacer
+      : undefined);
 
   // `enabled` is the only switch. The spec falls back to the default, because a
   // race created before the card existed has none — switching it on would
@@ -131,15 +181,32 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
           {overviewFor(mine)}
           <button
             onClick={() =>
-              run(() =>
-                releaseRacer(raceId, mine, uid!, { source: "manual" }),
-              )
+              run(async () => {
+                await releaseRacer(raceId, mine, uid!, { source: "manual" });
+                await rememberForSeason(() =>
+                  releaseSeasonRacer(race!.seasonId, mine, uid!, {
+                    source: "manual",
+                  }),
+                );
+              })
             }
             disabled={busy}
             className="rounded-2xl border border-neutral-700 py-4 text-lg active:bg-neutral-800 disabled:opacity-50"
           >
             Change racer
           </button>
+
+          {/* Below the car card rather than in a fourth tab: the panel has to
+              know who you are, and that is the claim. A standalone Team tab
+              would open on "claim a racer first" — this screen, with extra
+              steps. It renders nothing at all when teams are off. */}
+          {race?.seasonId && (
+            <TeamPanel
+              seasonId={race.seasonId}
+              playerId={mine}
+              race={{ positionOrder: order, participants, retired }}
+            />
+          )}
         </>
       ) : (
         <>
@@ -210,8 +277,25 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
             <button
               onClick={() =>
                 run(async () => {
-                  await joinRace(raceId, joinName, uid, { source: "manual" });
+                  const id = await joinRace(raceId, joinName, uid, {
+                    source: "manual",
+                  });
                   setJoinName("");
+                  // Someone who turns up and puts their name in has joined the
+                  // league, not just tonight's race — otherwise they would be
+                  // absent from the roster the commissioner builds next week's
+                  // grid from. Best-effort: the join already worked, and
+                  // addSeasonMember skips a race they are already on.
+                  await rememberForSeason(async () => {
+                    await addSeasonMember(race!.seasonId, joinName, {
+                      source: "manual",
+                    });
+                    if (uid) {
+                      await claimSeasonRacer(race!.seasonId, id, uid, null, {
+                        source: "manual",
+                      });
+                    }
+                  });
                 })
               }
               disabled={busy || !joinName.trim()}
@@ -236,15 +320,27 @@ export default function MyRacerView({ raceId }: { raceId: string }) {
             <div className="mt-6 flex flex-col gap-2">
               <button
                 onClick={() =>
-                  run(() =>
-                    claimRacer(
+                  run(async () => {
+                    await claimRacer(
                       raceId,
                       previewing,
                       uid!,
                       { source: "manual" },
                       mine ?? null,
-                    ),
-                  )
+                    );
+                    // Claim once a season rather than every game night. The
+                    // in-race claim above is the authority; this only seeds the
+                    // next race's participants.
+                    await rememberForSeason(() =>
+                      claimSeasonRacer(
+                        race!.seasonId,
+                        previewing,
+                        uid!,
+                        mine ?? null,
+                        { source: "manual" },
+                      ),
+                    );
+                  })
                 }
                 disabled={busy || !uid}
                 className="rounded-2xl bg-emerald-600 py-5 text-xl font-semibold active:bg-emerald-700 disabled:opacity-50"

@@ -171,12 +171,32 @@ record of truth.
 missing, no strangers) because a partial order would silently under-count a
 season rather than fail.
 
-Two scoring rules that look like bugs and aren't:
+**A retirement is scored on its placing, like anything else.** There is
+deliberately no `dnfPoints`, and the reason is that the finishing order already
+encodes the retirement: the first car to blow up is placed last, the next one
+above it, and so on. The order *is* the ranking, so a separate DNF value would
+score the same fact twice and let a flag override a placing.
 
-- **A DNF scores `dnfPoints` regardless of track position**, so retiring from
-  the lead never out-scores finishing last.
-- **A retirement doesn't count as a podium and doesn't set `bestFinish`** — a
-  car that broke while running second did not finish second.
+(An earlier version of this file recorded the opposite — a flat `dnfPoints`
+"so retiring from the lead never out-scores finishing last". That rule was
+solving a problem the finishing order already solves, because a car that
+retires from the lead is not placed first: it is placed where it went out.
+Seasons written before the change carry a stray `dnfPoints` in Firestore.
+Nothing reads it, and there is no migration, as usual.)
+
+**A retirement changes exactly one column: `dnfs`.** Points, wins, podiums,
+`bestFinish` and the countback all read the placing, because the placing *is*
+the classification — a car classified twelfth finished twelfth; it broke while
+doing it.
+
+(This file previously said a retirement "doesn't count as a podium and doesn't
+set `bestFinish`" — a car that broke while running second did not finish
+second. That reasoning belongs to the old model where the order was where a car
+*was on track* when it stopped. Under the ordering actually in use, the first
+car out is placed last and the next above it, so a placing already accounts for
+the retirement rather than flattering it. It has to be all of these columns or
+none: setting `bestFinish` from the placing while excluding the same placing
+from `podiums` puts a best finish of third and zero podiums on one row.)
 
 Ties break on countback (most wins, then most seconds, …), then player id for a
 stable order.
@@ -184,6 +204,301 @@ stable order.
 Season docs did not exist through Phase 1 — `createRace` wrote `seasonId:
 "default"` against nothing. `npm run seed-season` creates it, and is a no-op if
 it already exists so it can never clobber a scoring table tuned in the console.
+
+## Seasons
+
+**The season is the unit of identity; a race is a thing that happens inside
+one.** That sentence is the whole of what changed. `createRace` now *requires*
+`seasonId` and verifies the document exists before writing anything — the old
+`?? "default"` made every race silently a member of a season nothing could
+enumerate, and standings are scoped by `seasonId`, so a race pointing at
+nothing scores into nothing. The check is a `getDoc` before the batch rather
+than inside it, because a batch cannot read and an orphaned race is worse than
+a slower create.
+
+`lib/seasons.ts` is `lib/race.ts`'s counterpart, with the same rule: one
+transaction, document write plus event append, never a bare `updateDoc` from a
+component. `updateSeason` carries **only the fields the caller set**, so the log
+reads as a diff — the same shape as `updateRaceSettings`.
+
+**`deleteSeason` refuses a season that has any race.** Cascading would mean
+deleting races, and `deleteRace` already refuses anything not `complete` for
+good reasons; a season delete must not become the back door around that.
+Archiving is the action people actually want when a season ends — it drops out
+of pickers and keeps its standings — so delete exists for the season made by a
+mis-tap. Like `deleteRace` it appends **no event**: there would be nowhere to
+append it to, and the log survives orphaned because the rules forbid deleting
+event documents. It clears `members` and `teams` before the season doc, so a
+failure part-way leaves a findable season rather than orphaned subcollections.
+
+`ensureSeason` is deliberately *not* routed through `createSeason`. It writes a
+known id, is idempotent, and is a migration rather than a mutation — seeding the
+season that Phase 1's races already claimed to be in is not a thing that
+happened at the table, so it appends nothing.
+
+**The season event log ships before its view, on purpose.** Nothing replays it
+the way the race log can be replayed and Phase 3's chatbot does not write to it.
+It earns its place on one narrow ground: a team move re-derives the whole
+season's team standings silently, and this log is the only thing that will
+record the move happened. Unrecoverable after the fact, trivial to write now.
+`SeasonEvent` reuses the race log's `BaseEvent` shape — `at`, `source`, `actor`
+— so "who said so" reads the same whichever log you are in, and one shape means
+one set of rules.
+
+**The season owns the roster; the race owns the grid.** `seasons/{id}/members`
+answers "who is in this league"; the live doc's `positionOrder` answers "who is
+at the table tonight, and in what order". Someone missing a game night is not
+leaving the season. A subcollection rather than an array on the season document,
+because a member carries fields and item 17's transactions have to read *one*
+member without reading the whole league. `players/{id}` stays global and shrinks
+to what it should always have been: the human's name, stable across seasons.
+
+**"Added to all races" is the trap in this feature.** It reads as a fan-out over
+every race in the season. It must not be one — **a finished race is never
+written to.** Adding a member to a sealed `result.order` would mutate the
+scoring cache of a race they did not run so that standings could read a zero
+back out of it: a lie in the log to produce a number. The `+0` falls out for
+free from the roster being an *input to* `computeStandings`, which seeds a zero
+row per member before scoring anything. So `addSeasonMember` fans out over
+`scheduled` and `live` races only — usually one, often none — and each is an
+ordinary `joinRace` appending its own `playerJoined` event. It is a loop of
+transactions rather than one transaction, because the race list has to be
+queried first and the web SDK cannot query inside a transaction.
+
+**A missed race is not a retirement.** A member with no entry scores *nothing*,
+and now that a retirement scores its placing the two are visibly different: a
+driver who blew up on lap one was there and is placed last, which is worth
+whatever last is worth; a driver who stayed home was not there at all. The
+standings `races` column means *races entered*, which is why the view prints how
+many races the season has run beside it: 0 of 7 and 0 of 0 are different facts.
+
+`computeStandings` still scores everyone it finds in a result, **not** only the
+current members — someone who ran three races and later left the league still
+scored those points, and filtering them out would silently rewrite a past
+result.
+
+`removeSeasonMember` checks every reason it could fail *before* writing
+anything, and **refuses a member who is on a live grid.** `removePlayer` refuses
+there anyway; the point is that failing half way through a fan-out would leave
+the member dropped from two races and not a third. Retiring the car is the
+in-race answer, and it is reversible.
+
+**The new-race form is a checklist, not a textarea.** It draws the grid from the
+roster, unchecks absentees, and drags for order — and a name typed into it goes
+onto the roster too, because a new player turning up is normal and making the
+commissioner visit two screens for it is not. The displayed order is *derived*
+(dragged order ∩ roster, then whatever the roster has that it doesn't) rather
+than state synchronized from a listener, so a member added on another phone
+appears without a re-render fight over who owns the list.
+
+`scripts/backfill-season-members.ts` writes member documents **directly** rather
+than through `addSeasonMember`, and appends no season event. The fan-out would
+append a `playerJoined` claiming they arrived today, when they were already on
+those grids: a migration records that the roster caught up with history, not
+that history happened again.
+
+**The root did not become a season picker, and that was the decision most
+likely to get quietly reversed.** `/` is still a list of races; the season is
+*named in the header with a switcher beside it* — a control on the page, not a
+door in front of it. A picker would make the root a different page at every
+season rollover and add a tap to every game night for a league with one active
+season, which is the same reasoning that already forbids auto-redirecting to a
+single live race. `app/SeasonRaces.tsx` renders both `/` and `/season/:id`,
+because they are the same page and two copies would drift.
+
+**"Current season" is derived, not flagged**: the newest season that has not
+been archived. Nothing has to be remembered to be set — a new season becomes
+current by existing, an old one stops by being archived. If pinning is ever
+wanted, a `seasons/{id}.current` read inside `useCurrentSeason` is the whole
+change. `/standings` stays as a **redirect** to `/season/:id/standings` because
+phones have it bookmarked; it is a client redirect rather than a
+`next.config.ts` one because the destination is a document id nobody knows until
+the seasons collection has been read, and it `replace`s rather than pushes so it
+does not sit in the back stack bouncing the player forward.
+
+**The season claim is a default, not a second source of truth.**
+`SeasonMember.claimedBy` lets a phone claim once a season instead of every game
+night; `createRace` and `joinRace` *seed* `participants/{id}.claimedBy` from it,
+and from then on the in-race claim is authoritative and still re-tappable — which
+is what makes a stale claim from a borrowed tablet one tap to fix. "My racer" is
+still derived from the participant, never stored. `claimSeasonRacer` takes the
+racer the caller currently holds for the same reason `claimRacer` does: the web
+SDK cannot query a collection inside a transaction, so the value is verified
+before being cleared and a stale one can never free someone else's claim.
+
+Updating the season claim from the player view is deliberately **best-effort and
+silent on failure**. The in-race claim has already been written by then, so
+surfacing "someone else has that racer" about a racer visibly theirs would be a
+lie about what happened; the worst case is that next week seeds nothing and they
+tap again. Putting your own name in mid-race also joins you to the *league*, not
+just to tonight's race — otherwise you would be missing from the roster the next
+grid is built from.
+
+**`backfillRace` introduces no new event variant, deliberately.** A race the
+app never timed is created already complete, and its log gets an ordinary
+`raceCreated` followed by an ordinary `raceFinished` — so replaying it produces
+the correct state with zero new logic anywhere. `backfilled: true` on the race
+document is the cache flag that lets a view say "entered afterwards". It writes
+a **minimal live doc** (`currentPlayerId: null`, `currentRound: 0`,
+`positionOrder` = the finishing order) so `useLiveState` and every screen
+reading it keep working instead of each special-casing a race with no live
+state. Both its events are stamped with the *date the race was run*, a second
+apart, because `at` means "when this happened" everywhere else in the log and a
+race from March must not sort to the top of it.
+
+`scheduledAt` became an input rather than always `serverTimestamp()`, and that
+was a live bug waiting: without it every backfilled race sorts to today and
+scrambles the season's order. `updateRaceSettings` takes it too, since a typed
+date can be wrong.
+
+**`amendRaceResult` is the mutation that looks like it breaks "corrections
+append, they never mutate", and the reason it does not is worth keeping
+stated.** `result` on the race document is a **cache of the log**, exactly as
+the live doc is — `finishRace` writes it in the same transaction that appends
+`raceFinished`, purely so standings can be a pure function over the races
+listener. Rewriting a cache is fine; rewriting history is not, and nothing here
+does. The original `raceFinished` is untouched, a `raceResultAmended` records
+the new order, and a `correction` pointing at that original is appended beside
+it, so the history view shows both in chronological place. Standings recompute
+on the next snapshot because they were never stored.
+
+Two details it does *not* share with `finishRace`. It validates against the
+sealed `result.order` rather than the live doc, because that is the record of
+who was actually in the race. And it does **not** union the retirements with
+what is already there: `finishRace` does that so a finishing form cannot
+silently un-retire a car, but "we wrote down that he retired and he did not" is
+exactly the mistake an amendment exists to fix, and a union would make it the
+one correction that cannot be made. The target event is looked up *before* the
+transaction, because the web SDK cannot query a collection inside one.
+
+`scripts/prune-orphan-races.ts` reports by default and only deletes with
+`--delete`, and it goes through `deleteRace` — so the "finish it first" rule
+holds there too, and a live orphan is reported and left alone. A one-time script
+rather than a button, so that rule never acquires a back door.
+
+## Teams
+
+Two house rules shape this, and both **delete mechanism rather than adding it**.
+Do not build for the cases they forbid.
+
+**Every team is the same size**, and **nobody switches teams during a season.**
+The second one is load-bearing: with no transfers there is nothing for a
+`result.teams` snapshot to protect against, so `finishRace` and `RaceResult` are
+untouched by the entire teams arc and team points are attributed by *current*
+membership. The interesting consequence is what happens when someone does get
+moved — under this rule that is not a transfer, it is a **correction of a
+recording error**: the player was always on that team and it was written down
+wrong. Re-deriving the whole season's team standings is then exactly the right
+behaviour, and the thing that would be a hazard in a transfer model is the
+desired outcome here. The trail of who moved and when lives in the season log,
+which is the only place it lives at all.
+
+**Equal sizes are not enforced in `lib/`, deliberately.** It is a season-wide
+invariant, so a transaction cannot check it without a query — and enforcing it
+would block creating the third team until the first two are full, which is
+hostile during the ten minutes a league gets set up in. So the admin path
+(`assignToTeam`) may overfill a team while the player path (`joinTeam`) is
+capacity-checked, and the admin view *flags* an uneven team and a roster that
+does not divide by `teamSize`. Lowering `teamSize` below an existing team's size
+is allowed and kicks nobody: it blocks new joins and leaves everyone where they
+are. Removing someone from their team because a setting changed is the sort of
+thing that ends a game night.
+
+**Two invariants are denormalized, because the web SDK cannot query inside a
+transaction** — the `claimRacer` problem again:
+
+- `teams/{id}.members` is the **capacity** authority: "is there an open slot" is
+  `members.length < teamSize`, from one document read.
+- `members/{playerId}.teamId` is the **exclusivity** authority: "am I already on
+  a team" is one field, from one document read.
+
+`joinTeam` reads both, checks both, writes both, in one transaction, so neither
+can be violated by two phones tapping at once. `leaveTeam` finds the team from
+the member document — that is what the exclusivity mirror is *for* — and
+tolerates a team that has already been deleted.
+
+**Colour uniqueness** spans every team in the season, so the answer lives in
+`seasons/{id}.teamColors` — a map from colour key to team id, on the one
+document every colour-changing transaction already reads. Written by **dot
+path**, never whole: writing it whole would clobber a colour claimed a second
+earlier, exactly the reason race settings toggles are written by dot path.
+Released with `deleteField()`. The picker reads it from a document it is already
+streaming, so taken colours grey out with no extra listener — greyed rather than
+hidden, because seeing that Ferrari is spoken for is information. The
+consequence is that **a palette colour a team is wearing cannot be removed**;
+`updateTeamConfig` refuses it and the palette editor greys the ×.
+
+`teamConfig` follows the `scoringConfig` and car-status precedent exactly:
+Firestore, not code; **absent means off**; existing seasons untouched; no deploy
+to change a house variant. `teamConfigFor` is the one place absence is resolved,
+so a season switched on before a palette was written gets the house palette
+rather than an empty picker. `teamConfig.scoring` stays even though with equal
+full teams `average` is `sum ÷ teamSize` — a monotone transform with an
+identical ranking. One field and one branch, and the only case where it matters
+is the one the house rule forbids and somebody will eventually allow.
+
+`playerManaged` is **a mode, not a permission.** There is no auth to enforce one
+with, the same honesty as `/admin` not being hidden. What `lib/` enforces is the
+soft check that actually works at a table: a player may edit the team they are
+on. Say so wherever it is read, so nobody later mistakes it for security.
+
+**Constructor standings are derived, never stored** — the same rule as driver
+standings, and `computeTeamStandings` is a pure function beside
+`computeStandings` in `lib/scoring.ts`, which still imports nothing from
+Firestore. A team score is an *aggregate of driver rows* rather than a second
+scoring rule, so there is one place points are worked out. It takes `seasonId`
+and scopes: unscoped races would quietly fold another season's points into this
+one's team table, which is wrong rather than broken.
+
+`scoring: "average"` divides by the members who **entered** that race, not by
+`teamSize` — dividing by a constant is a monotone transform and would rank
+identically to `sum`, which would make the option pointless.
+
+The standings view is one page with a **Drivers | Constructors** segmented
+control that does not render at all when teams are off. The drivers table gains
+a 4px left border in the team's colour — grouping readable without a legend —
+but **colour is never the only signal**: the Team column names it too. Sorting
+is by column header, remembered per device in `localStorage` under
+`formulad:standingsSort`, read through `useSyncExternalStore` exactly as
+`formulad:standingsMode` is, so SSR and hydration agree without an effect. The
+crown stays on the points leader whatever the sort in force — sorting by team
+rank must not decorate whoever floats to the top — and the leading *team* gets a
+**different** mark, a colour chip with a trophy, because two crowns on one row
+reads as one thing being doubly first. The table scrolls horizontally inside its
+own container; the page never does.
+
+**The player's team panel lives inside My racer, not in a fourth tab.** The
+panel has to know who *you* are, and that is the claim — a standalone Team tab
+would open on "claim a racer first", which is the My racer screen with extra
+steps. `PlayerTabs` stays three tabs. `app/TeamPanel.tsx` is rendered twice from
+one component: under the car card during a race, where teammates show live
+position, laps and DNF, and standing alone at `/season/:id/teams` between game
+nights, where the racer is resolved from the *season* claim because there is no
+race to derive one from. Do not fork it — join, leave and rename are the same
+paths in both places.
+
+**"Leave team" is muted, small, and on its own**, the same reasoning as the
+reverse gear: a rare action that undoes something must not sit beside a target a
+thumb is aimed at all evening. Full teams stay **visible and disabled** rather
+than hidden, for the same reason a claimed racer does — hiding one makes a
+player think their friend's team is missing.
+
+The admin assigns through a **slot grid** — one card per team showing `teamSize`
+slots, an empty slot tapping to a picker of unassigned members. Not a dropdown
+per player: with teams of two and a known roster it is a handful of taps, and an
+uneven team or a leftover player is visible at a glance in a way a dropdown
+never is.
+
+**Firestore rules do not inherit into subcollections.** `match /seasons/{id}`
+covers the season document and nothing under it, and a missing nested match is
+a silent permission denial at the table, not a build error. So `events`
+(append-only, like race events), `members` and `teams` are all declared now,
+ahead of the items that create the last two: rules are one file, and a partial
+ruleset means the next change ships and mysteriously cannot write. The
+`races` composite index on `seasonId ASC, scheduledAt DESC` ships early for the
+same reason — a missing index fails at runtime, so it is created before anything
+depends on it. `useRaceList(seasonId)` is what uses it; called with no argument
+it lists every race, which is what `/` wants.
 
 ## Conventions
 
@@ -206,12 +521,86 @@ it already exists so it can never clobber a scoring table tuned in the console.
   historical path redirects **straight to the current one**, never chaining
   through the intermediate name: the tablets have old URLs bookmarked and a
   second round trip on house wifi buys nothing.
+- **The season's subviews are Races / Racer / Standings**, as a tab bar
+  (`app/SeasonTabs.tsx`) rather than the loose "standings" and "teams" links
+  that used to hang off the season name and read as decoration. A **top** bar,
+  unlike `PlayerTabs`: that one is fixed to the bottom because it is operated
+  mid-game with a thumb, while these pages are browsed between game nights and
+  a bar pinned over the standings table would cost a row of it for nothing.
+  `app/SeasonShell.tsx` is the frame both `/` and the `/season/:id` layout
+  render, so the two cannot drift; `/`'s Races tab points at `/` rather than at
+  the season's own URL, keeping the root the same shape every week.
+- **Identity is established at the season, not in a race.** Item 15 moved the
+  claim to `SeasonMember.claimedBy` but left the only screen that could make one
+  inside a race — so a player still had to open a race to say which racer was
+  theirs, which is backwards: the in-race claim is a *re-tappable override*, not
+  where identity comes from. `/season/:id/racer` is that screen. Claim once and
+  every race the season creates afterwards already knows you, because
+  `createRace` and `joinRace` seed from it. Typing your own name there joins the
+  league *and* claims you in one act — nobody types their name in to then watch
+  someone else take it.
+- **The in-race "my racer" falls back to the season claim.** `createRace` and
+  `joinRace` seed `participants/{id}.claimedBy` from it, but a race that already
+  existed when you picked has nothing seeded — and that screen would then ask
+  you to pick again, which is what picking at the season level exists to stop.
+  So the derivation is: the participant claimed by this uid, or else the racer
+  this uid holds for the season **provided that participant is unclaimed here**.
+  If another phone has taken them in this race, the in-race claim wins — that is
+  the whole point of it being authoritative and re-tappable. Still derived,
+  never stored, and nothing claims on render.
+- **Teams is deliberately not a season tab.** The panel has to know who you are,
+  which is the claim, so it sits below the racer on that same screen — a Team
+  tab would open on "pick your racer first", which is the Racer screen with
+  extra steps. Same reasoning that keeps it out of the in-race tab bar.
+  `/season/:id/teams` redirects to `/season/:id/racer`.
+- **`/admin` is a season layer above the races.** The new-race form used to sit
+  on `/admin` itself; it moved to `/admin/season/:seasonId` because a race must
+  belong to a season that exists, so there is no coherent place to create one
+  outside a season. `NewRaceForm` and `RaceList` take a `seasonId` rather than
+  being forked, the same reasoning as `RaceList`'s `variant`.
+- **A race records whose house it was played at.** `Race.location` is free
+  text, not a reference to a player: the venue is usually "Nick's" but it is
+  just as often "the pub", and modelling it as a player would make the second
+  case unsayable. Optional, absent means nobody said, and an **empty string
+  clears it** rather than being refused — the same shape as a participant note,
+  and for the same reason: the clearing still appends an event. `scheduledAt`
+  was already settable in `lib/`; the forms now expose it. When the chosen day
+  is *today* the new-race form sends **now** rather than local midnight, so two
+  races created the same evening still order against each other.
+- **`deleteRace` carves out a race that can never be finished.** The "finish it
+  first" rule protects a race people are still playing, but a race whose live
+  doc predates the `positionOrder`/`roundOrder` split renders `StaleRace` on
+  every screen that could finish it — so the rule made it undeletable forever.
+  A race the app refuses to render is not one anybody is playing. `StaleRace`
+  now links to race settings instead of telling people to open the Firebase
+  console, and that screen offers the delete.
+- **The season admin's five sections are real routes**, not one stacked page and
+  not a tab component holding state: `.../:seasonId`, `/roster`, `/teams`,
+  `/scoring`, `/settings`, framed by a layout the way the player subviews are.
+  Stacked, it meant scrolling past a whole new-race form to reach the roster and
+  past the roster to reach scoring. Routes rather than state for one of the same
+  reasons the player view uses them — editing a scoring table and hitting reload
+  should land back on the scoring table, and "the teams page" should be a link.
+  The tab bar is at the **top**, unlike `PlayerTabs`: this is a laptop surface
+  read at desk distance, not a phone held at arm's length. It scrolls sideways
+  rather than wrapping, so the row stays one row at 390px.
+- **A `<button>` with no `type` inside a `<form>` is a submit button.** The
+  new-race and backfill screens put `ReorderableList` and `AddMember` inside a
+  form, where a tap on the drag handle submitted it and created the race. The
+  handle carries `type="button"` for that reason, and `AddMember` is
+  deliberately **not** a `<form>` — a form cannot contain a form, and it failed
+  hydration. Enter is wired up by hand there, which is all the element was
+  buying. Anything new that renders inside those forms has the same obligation.
 - **`/` belongs to players; `/admin` is the commissioner's.** The root page is
   a list of races — tap one, land on `/race/:id/player` — so the site root is
   the only URL anyone has to know and it never changes between game nights.
   Everything the root used to do (new-race form, per-view links) moved to
   `/admin`, reachable only from `Nav.tsx`; nothing hides it, because there is
   no auth to hide it behind yet and pretending otherwise would be theatre.
+  `Nav` offers the half you are **not** in — "admin" from the player side,
+  "player view" from the commissioner's — so the link is never a no-op pointing
+  at the page you are already on, which is what "admin" was on every admin
+  page.
   `app/RaceList.tsx` renders both with a `variant` prop rather than forking —
   the listener, ordering and empty state are shared and two copies would drift.
   The landing groups live races above a collapsed "Past races", and
@@ -322,9 +711,24 @@ it already exists so it can never clobber a scoring table tuned in the console.
   participants, then the live doc, then the race doc **last**, so a failure
   part-way leaves a findable race rather than orphaned subcollections. It is
   not a transaction because Firestore has no client-side recursive delete.
-- **`advanceTurn` deliberately does not check the race status.** It is the hot
-  path — once per turn, per race — and adding a race-doc read would double its
-  cost to guard against something no screen offers.
+- **A sealed race refuses the clock and the turn, and the guard is conditional
+  so the hot path keeps costing one read.** `advanceTurn` used to skip the
+  status check entirely, on the grounds that it is the hot path and no screen
+  offered the button on a finished race. The second half was wrong: the player
+  view fell straight through to the live controls once a race was sealed, so
+  Next turn, resume and the reverse gear all kept mutating a finished race.
+  `refuseIfOver` keeps the original bargain rather than reversing it — a race in
+  progress always has a `currentPlayerId`, so a normal turn still costs exactly
+  one document read, and only "nobody's turn" pays for a second one to tell
+  *over* from *between rounds*. That is precisely the ambiguity this file warns
+  must not be resolved from the live doc alone. It guards `advanceTurn`,
+  `startRound`, `rewindTurn`, `pauseTurn` and `resumeTurn`; notes and result
+  amendments stay editable on a sealed race, because they are corrections.
+- **A finished race has its own screen**, like `scheduled` does: the final
+  classification, the winner marked, DNFs flagged, and a way through to the
+  season standings — with no controls at all. Everything in the live branch
+  assumes a race actually being played. A screen that merely hides a button is
+  not the same as a rule, which is why `lib/` refuses those calls too.
 - **Race configuration goes through `updateRaceSettings`**, which writes the
   race doc and/or the live doc and appends one `raceSettingsChanged` event
   carrying **only the fields that changed**, so the log reads as a diff rather
@@ -463,9 +867,29 @@ nudging, per-car laps, manual correction.
   - **Done:** a race settings subview, and `scheduled` given real meaning —
     races start unstarted, the grid is editable until Start race drops the
     flag, and the roster locks after that.
-  - **Next:** season-level player pages (a view over the same `result` data
-    across races), then post-game review to confirm the finishing order before
-    a race is sealed.
+  - **Done:** seasons as a real entity — created, renamed, scored and archived
+    from `/admin`, with a season event log, the subcollection rules, and the
+    `seasonId`/`scheduledAt` index. `createRace` verifies its season.
+  - **Done:** the season roster — members own the league, races draw their grid
+    from it, and standings seed a zero row per member so a missed night costs
+    nothing and rewrites no sealed race. `npm run backfill-season-members`
+    builds the roster from races already run.
+  - **Done:** player-side season scoping — `/season/:id`, per-season standings,
+    a switcher in the header rather than a picker in front of the root, and a
+    racer claim that lasts the season and seeds each race's.
+  - **Done:** backfill a race the app never timed, and amend a finished one —
+    plus `npm run prune-orphan-races` for races pointing at a season that isn't
+    there.
+  - **Done:** teams, admin side — `teamConfig` in Firestore, the palette and its
+    colour-claim map, the slot grid, and both denormalized invariants with
+    concurrency covered by the smoke test.
+  - **Done:** teams on a player's phone — the panel under the car card and the
+    same panel standing alone at `/season/:id/teams`.
+  - **Done:** the standings rebuild — drivers and constructors in one view,
+    sortable, with team colours and a mark for each leader. **The seasons and
+    teams arc is complete.**
+  - **Next:** post-game review to confirm the finishing order before a race is
+    sealed.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
     rules tighten — right now any signed-in caller can write anything, which
     suits a living room and not a public site. Decided: **Google sign-in**, with

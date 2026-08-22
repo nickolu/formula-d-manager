@@ -32,7 +32,10 @@ export default function PlayerHeader({ raceId }: { raceId: string }) {
       <div className="min-w-0 flex-1 text-right">
         <p className="truncate text-sm font-medium">{race?.track ?? "…"}</p>
         {race && (
-          <p className="text-xs text-neutral-500">
+          <p className="truncate text-xs text-neutral-500">
+            {/* Whose house, when there is one. A player arriving cold has
+                usually been told the venue and not the track. */}
+            {race.location ? `${race.location} · ` : ""}
             {race.lapCount} {race.lapCount === 1 ? "lap" : "laps"}
             {/* "live" is the normal case and would be noise; the other two
                 change what the screen below means. */}
