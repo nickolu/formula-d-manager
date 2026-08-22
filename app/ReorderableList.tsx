@@ -5,7 +5,8 @@ import { useDragOrder } from "./useDragOrder";
 /**
  * The standings list, dragged by a ⠿ handle.
  *
- * The drag mechanics live in useDragOrder, shared with the track view. The rows
+ * The drag mechanics live in useDragOrder, shared with the track view: the row
+ * lifts and follows the pointer while the rest slide out of its way. The rows
  * carry ↑/↓ buttons too — dragging is the fast path, not the only one.
  */
 export default function ReorderableList({
@@ -19,20 +20,20 @@ export default function ReorderableList({
   renderRow: (id: string, index: number) => React.ReactNode;
   disabled?: boolean;
 }) {
-  const { order, draggingId, registerRow, dragHandlers } = useDragOrder({
-    items,
-    onReorder,
-    disabled,
-  });
+  const { order, projectedIndex, registerRow, rowStyle, dragHandlers } =
+    useDragOrder({
+      items,
+      onReorder,
+      disabled,
+    });
 
   return (
     <ol className="flex flex-col gap-1">
-      {order.map((id, i) => (
-        <li
-          key={id}
-          ref={registerRow(id)}
-          className={draggingId === id ? "opacity-60" : undefined}
-        >
+      {order.map((id) => (
+        // The row is positioned by the hook: dragged rows follow the pointer,
+        // the ones they pass ease aside. Nothing is dimmed — the lift is the
+        // feedback, and a half-transparent row you are holding reads as broken.
+        <li key={id} ref={registerRow(id)} style={rowStyle(id)}>
           <div className="flex items-center gap-2">
             <button
               aria-label={`Reorder ${id}`}
@@ -42,7 +43,9 @@ export default function ReorderableList({
             >
               ⠿
             </button>
-            <div className="flex-1">{renderRow(id, i)}</div>
+            {/* The projected index, not the render index: the row sits where
+                it was but reads as where it is going. */}
+            <div className="flex-1">{renderRow(id, projectedIndex(id))}</div>
           </div>
         </li>
       ))}

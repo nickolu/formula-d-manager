@@ -66,6 +66,23 @@ export default function PlayerView({ raceId }: { raceId: string }) {
   const timer = readTimer(live, now);
   const nameOf = (id: string) => players.get(id)?.displayName ?? id;
 
+  /**
+   * For a standings nudge, which the list and the track both render
+   * optimistically: no busy flag, so nothing dims for the round-trip after a
+   * drop. Reports the failure and rethrows — the drag undoes itself by
+   * catching this, and swallowing it would strand the list on an order that
+   * was never written.
+   */
+  async function runReported(action: () => Promise<void>) {
+    setActionError(null);
+    try {
+      await action();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+      throw e;
+    }
+  }
+
   async function run(action: () => Promise<void>) {
     setBusy(true);
     setActionError(null);
@@ -207,7 +224,9 @@ export default function PlayerView({ raceId }: { raceId: string }) {
           participants={participants}
           disabled={busy}
           onReorder={(next) =>
-            run(() => setPositionOrder(raceId, next, { source: "manual" }))
+            runReported(() =>
+              setPositionOrder(raceId, next, { source: "manual" }),
+            )
           }
           onCompleteLap={(id) =>
             run(() => completeLap(raceId, id, { source: "manual" }))
@@ -221,7 +240,9 @@ export default function PlayerView({ raceId }: { raceId: string }) {
         items={live.positionOrder}
         disabled={busy}
         onReorder={(next) =>
-          run(() => setPositionOrder(raceId, next, { source: "manual" }))
+          runReported(() =>
+            setPositionOrder(raceId, next, { source: "manual" }),
+          )
         }
         renderRow={(id, i) => {
           const roundIdx = live.roundOrder.indexOf(id);

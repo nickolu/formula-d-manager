@@ -36,7 +36,7 @@ export default function TrackView({
 }) {
   const [selected, setSelected] = useState<PlayerId | null>(null);
 
-  const { order, draggingId, registerRow, dragHandlers } = useDragOrder({
+  const { order, registerRow, rowStyle, dragHandlers } = useDragOrder({
     items: live.positionOrder,
     onReorder,
     disabled,
@@ -96,11 +96,14 @@ export default function TrackView({
 
               <div
                 ref={registerRow(id)}
+                // Positioned by the hook while a drag is in progress: the car
+                // being moved rides with the pointer, the others ease aside.
+                style={rowStyle(id)}
                 // Alternating lanes read as a gaggle of cars rather than a
                 // column of buttons. Purely cosmetic — order is the data.
                 className={`flex items-center gap-3 ${
                   i % 2 === 0 ? "flex-row" : "flex-row-reverse"
-                } ${draggingId === id ? "opacity-60" : ""}`}
+                }`}
               >
                 <button
                   aria-label={`Drag ${nameOf(id)} to reorder`}

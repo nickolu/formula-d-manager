@@ -42,7 +42,16 @@ export default function SettingsView({ raceId }: { raceId: string }) {
   const [laps, setLaps] = useState<string | null>(null);
   const [seconds, setSeconds] = useState<string | null>(null);
 
-  async function run(label: string, action: () => Promise<void>) {
+  /**
+   * `rethrow` is for callers that undo themselves on failure — the grid drag
+   * holds the dropped order optimistically and reverts by catching. Swallowing
+   * there would strand the list on an order that was never written.
+   */
+  async function run(
+    label: string,
+    action: () => Promise<void>,
+    rethrow = false,
+  ) {
     setBusy(true);
     setStatus(null);
     try {
@@ -50,6 +59,7 @@ export default function SettingsView({ raceId }: { raceId: string }) {
       setStatus(label);
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
+      if (rethrow) throw e;
     } finally {
       setBusy(false);
     }
@@ -198,8 +208,10 @@ export default function SettingsView({ raceId }: { raceId: string }) {
               items={grid}
               disabled={busy}
               onReorder={(next) =>
-                run("Grid saved", () =>
-                  setPositionOrder(raceId, next, { source: "manual" }),
+                run(
+                  "Grid saved",
+                  () => setPositionOrder(raceId, next, { source: "manual" }),
+                  true,
                 )
               }
               renderRow={(id, i) => (

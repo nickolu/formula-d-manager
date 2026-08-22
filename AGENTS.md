@@ -367,6 +367,27 @@ it already exists so it can never clobber a scoring table tuned in the console.
   the phones and tablet this is for. The mechanics live in
   `app/useDragOrder.ts` and are shared by `app/ReorderableList.tsx` and the
   track view; the ↑/↓ buttons stay as a fallback.
+- **The list does not reorder while you drag it.** An earlier version spliced a
+  preview array on every pointermove, so rows jumped between slots and the thing
+  under your finger was whatever had landed there. Now the DOM order stands
+  still and everything moves by transform: the dragged row lifts and follows the
+  pointer, the rows it passes ease aside, and only the drop changes the real
+  order. Geometry is measured once at drag start — nothing reflows mid-drag, so
+  those measurements stay true and each frame is a subtraction. Anything that
+  *reads* as a position, like a row's number, comes from `projectedIndex` rather
+  than the render index, or it would sit there contradicting the eye.
+- **The drop is held optimistically too**, for the same reason the car card
+  holds a tapped value: `onReorder` is a transaction, so clearing the transforms
+  on pointer-up would snap the row back to where it started and leave it there
+  for the whole round-trip. The dropped order is adopted in the same render the
+  transforms clear — laying the row out where it already appears to be — and
+  released when the real list agrees, or when someone else moves the list out
+  from under it. While the write is in flight `items` still reads as it did
+  before the drop, which is what lets those two comparisons tell the cases apart
+  without waiting on the write at all. Reconciled **during render**, not in an
+  effect: it is adjusting state because a prop arrived. A failed write reverts
+  by dropping the held order, which is why every `onReorder` that reports an
+  error must also rethrow.
 - The player view renders standings two ways — `list` or `track` — chosen by a
   toggle and remembered per device in `localStorage` (key
   `formulad:standingsMode`, deliberately unchanged across the renames so no
