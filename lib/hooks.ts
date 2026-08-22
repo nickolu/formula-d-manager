@@ -1,8 +1,9 @@
 "use client";
 
+import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { collection, doc, limit, onSnapshot, orderBy, query } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
-import { db } from "./firebase";
+import { app, db } from "./firebase";
 import { liveDoc } from "./race";
 import { computeStandings } from "./scoring";
 import { seasonDoc } from "./seasons";
@@ -193,6 +194,24 @@ export function useStandings(seasonId: string) {
   );
 
   return { standings, season, loading };
+}
+
+/**
+ * This device's anonymous auth uid — the identity AuthGate already establishes.
+ *
+ * Read through a hook rather than calling getAuth() ad-hoc from components, so
+ * there is one place that knows where identity comes from when Phase 2 swaps
+ * anonymous sessions for real accounts.
+ */
+export function useUid() {
+  const [uid, setUid] = useState<string | null>(null);
+
+  useEffect(
+    () => onAuthStateChanged(getAuth(app), (user) => setUid(user?.uid ?? null)),
+    [],
+  );
+
+  return uid;
 }
 
 /**

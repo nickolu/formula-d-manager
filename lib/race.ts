@@ -530,6 +530,69 @@ export async function completeLap(
 }
 
 /**
+ * Claims a racer for this device.
+ *
+ * A transaction that re-reads `claimedBy` and refuses if it belongs to someone
+ * else: two phones tapping the same racer at the same moment is a real race at
+ * a table, not a theoretical one.
+ *
+ * `previousPlayerId` is the racer this device already holds, if any — passed in
+ * rather than looked up because the web SDK cannot run a collection query
+ * inside a transaction. It is *verified* before being cleared, so a stale value
+ * from the caller can never release someone else's claim.
+ */
+export async function claimRacer(
+  raceId: string,
+  playerId: PlayerId,
+  uid: string,
+  who: Actor,
+  previousPlayerId?: PlayerId | null,
+) {
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(participantDoc(raceId, playerId));
+    if (!snap.exists()) throw new Error(`${playerId} is not in this race`);
+
+    const previous =
+      previousPlayerId && previousPlayerId !== playerId
+        ? await tx.get(participantDoc(raceId, previousPlayerId))
+        : null;
+
+    const claimedBy = (snap.data() as Participant).claimedBy ?? null;
+    if (claimedBy === uid) return; // already ours
+    if (claimedBy) throw new Error("Someone just took that racer");
+
+    if (previous?.exists() && (previous.data() as Participant).claimedBy === uid) {
+      tx.update(previous.ref, { claimedBy: null });
+      appendEvent(tx, raceId, who, {
+        type: "racerReleased",
+        playerId: previousPlayerId,
+        uid,
+      });
+    }
+
+    tx.update(participantDoc(raceId, playerId), { claimedBy: uid });
+    appendEvent(tx, raceId, who, { type: "racerClaimed", playerId, uid });
+  });
+}
+
+/** Gives a racer back. A uid that doesn't hold the claim is a no-op, not an error. */
+export async function releaseRacer(
+  raceId: string,
+  playerId: PlayerId,
+  uid: string,
+  who: Actor,
+) {
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(participantDoc(raceId, playerId));
+    if (!snap.exists()) return;
+    if ((snap.data() as Participant).claimedBy !== uid) return;
+
+    tx.update(participantDoc(raceId, playerId), { claimedBy: null });
+    appendEvent(tx, raceId, who, { type: "racerReleased", playerId, uid });
+  });
+}
+
+/**
  * Records why a car's race went the way it did. Usually a retirement reason,
  * but any car can have one.
  *

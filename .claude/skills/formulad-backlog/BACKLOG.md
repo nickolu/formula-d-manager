@@ -21,7 +21,7 @@ fields exist.
 | 7 | 7 | Between-rounds pause step | **done** | 6 |
 | 8 | 9 | Delete a race | **done** | 6 |
 | 9 | 8 | Notes in results | **done** | 5 |
-| 10 | 10 | My Racer identity | todo | 3 |
+| 10 | 10 | My Racer identity | **done** | 3 |
 | 11 | 10.5 | Join a race | todo | 10 |
 | 12 | 11 | Per-player car status | todo | 6, 10 |
 

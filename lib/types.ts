@@ -101,6 +101,19 @@ export interface Participant {
   finalPosition: number | null;
   dnf: boolean;
   /**
+   * The anonymous auth uid that has claimed this racer, or null/absent.
+   *
+   * Shared state, not a device preference: "a player cannot pick a racer
+   * someone else already picked" is a fact about the race, so it cannot live
+   * in localStorage. The uid is stable per device, which is exactly the
+   * granularity wanted — one phone, one racer.
+   *
+   * "My racer" itself is never stored: it is the participant whose claimedBy
+   * matches this device's uid, derived the same way standings and car identity
+   * are, so the two halves cannot disagree.
+   */
+  claimedBy?: string | null;
+  /**
    * Free text about this car's race — usually why it didn't finish.
    *
    * Deliberately NOT a DNF-only reason field: "blew the engine on lap 3" and
@@ -295,6 +308,20 @@ export interface PlayerRemovedEvent extends BaseEvent {
   playerId: PlayerId;
 }
 
+/** A device claimed a racer as its own. */
+export interface RacerClaimedEvent extends BaseEvent {
+  type: "racerClaimed";
+  playerId: PlayerId;
+  uid: string;
+}
+
+/** A device gave a racer back. */
+export interface RacerReleasedEvent extends BaseEvent {
+  type: "racerReleased";
+  playerId: PlayerId;
+  uid: string;
+}
+
 /** Commentary on one car's race. An empty note is a clearing, and is logged. */
 export interface ParticipantNoteSetEvent extends BaseEvent {
   type: "participantNoteSet";
@@ -347,6 +374,8 @@ export type RaceEvent =
   | LapCompletedEvent
   | DnfChangedEvent
   | ParticipantNoteSetEvent
+  | RacerClaimedEvent
+  | RacerReleasedEvent
   | TurnRewoundEvent
   | TurnPausedEvent
   | TurnResumedEvent

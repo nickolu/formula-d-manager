@@ -22,11 +22,13 @@ import {
 import { app, db } from "../lib/firebase";
 import {
   advanceTurn,
+  claimRacer,
   completeLap,
   deleteRace,
   finishRace,
   liveDoc,
   pauseTurn,
+  releaseRacer,
   removePlayer,
   resumeTurn,
   rewindTurn,
@@ -436,6 +438,41 @@ async function main() {
     () => deleteRace(raceId),
     "a race that hasn't been finished cannot be deleted",
   );
+
+  console.log("\nclaiming a racer:");
+  const claimOf = async (id: string) =>
+    ((await getDoc(doc(db, "races", raceId, "participants", id))).data() as Participant)
+      .claimedBy ?? null;
+  const PHONE_A = "smoke-uid-a";
+  const PHONE_B = "smoke-uid-b";
+
+  await claimRacer(raceId, "alpha", PHONE_A, { source: "manual" });
+  check("a claim sticks to the participant", (await claimOf("alpha")) === PHONE_A);
+  await claimRacer(raceId, "alpha", PHONE_A, { source: "manual" });
+  check("re-claiming your own racer is a no-op", (await claimOf("alpha")) === PHONE_A);
+  await rejects(
+    () => claimRacer(raceId, "alpha", PHONE_B, { source: "manual" }),
+    "a second device cannot take a claimed racer",
+  );
+
+  // Changing racer releases the old claim in the SAME transaction, so there is
+  // never a moment where one device holds two.
+  await claimRacer(raceId, "charlie", PHONE_A, { source: "manual" }, "alpha");
+  check("changing racer frees the old one", (await claimOf("alpha")) === null);
+  check("...and holds the new one", (await claimOf("charlie")) === PHONE_A);
+  check(
+    "the freed racer is claimable by the other device",
+    await claimRacer(raceId, "alpha", PHONE_B, { source: "manual" }).then(() => true, () => false),
+  );
+
+  // A stale previousPlayerId must never release someone else's claim.
+  await claimRacer(raceId, "bravo", PHONE_A, { source: "manual" }, "alpha").catch(() => {});
+  check("a stale hand-back cannot free another device's racer", (await claimOf("alpha")) === PHONE_B);
+
+  await releaseRacer(raceId, "alpha", PHONE_A, { source: "manual" });
+  check("releasing a racer you don't hold is a no-op", (await claimOf("alpha")) === PHONE_B);
+  await releaseRacer(raceId, "alpha", PHONE_B, { source: "manual" });
+  check("releasing your own racer frees it", (await claimOf("alpha")) === null);
 
   console.log("\nnotes:");
   const noteOf = async (id: string) =>

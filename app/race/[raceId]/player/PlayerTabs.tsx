@@ -7,11 +7,12 @@ import { usePathname } from "next/navigation";
  * A bottom tab bar, fixed. Thumb-reachable on a phone — a top tab bar is not —
  * and it survives the page scrolling.
  *
- * Only subviews that exist get a tab. A tab leading to a 404 is worse than no
- * tab, so "My racer" arrives with the item that builds it.
+ * Only subviews that exist get a tab — a tab leading to a 404 is worse than no
+ * tab. Four fit at phone width; a fifth would need an overflow.
  */
 const TABS = [
   { segment: "", label: "Turn order" },
+  { segment: "my-racer", label: "My racer" },
   { segment: "history", label: "History" },
   { segment: "settings", label: "Settings" },
 ];

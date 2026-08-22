@@ -209,6 +209,20 @@ it already exists so it can never clobber a scoring table tuned in the console.
 - **Nobody's turn means two different things** — the race is over, or it is
   between rounds. Every view discriminates on `race.status === "complete"`,
   never on the null `currentPlayerId`. `finishRace` nulls it too.
+- **Identity is a claim on a participant, and "my racer" is derived.**
+  `Participant.claimedBy` holds the anonymous auth uid `AuthGate` establishes —
+  read through `useUid()`, never `getAuth()` from a component, so there is one
+  place to change when Phase 2 brings real accounts. It has to be shared state
+  rather than `localStorage`: "you cannot pick a racer someone else picked" is
+  a fact about the race. The device's own racer is never stored — it is the
+  participant whose `claimedBy` matches, derived like standings and car
+  identity, so the two halves cannot disagree. `claimRacer` re-reads
+  `claimedBy` in a transaction and refuses a taken racer; two phones tapping
+  the same one is a real race at a table. Changing racer releases the old claim
+  in the same transaction, and the caller passes the racer it currently holds
+  because **the web SDK cannot run a collection query inside a transaction** —
+  that value is verified before being cleared, so a stale one can never free
+  someone else's claim.
 - **One free-text note per participant, not a DNF-only reason.** `Participant.note`
   is written by `setParticipantNote`, and the results view labels it by context —
   "Reason" for a retired car, "Note" otherwise. "Blew the engine on lap 3" and
@@ -293,7 +307,7 @@ it already exists so it can never clobber a scoring table tuned in the console.
 ## Verification
 
 ```bash
-npm run smoke         # 112 end-to-end checks against the real project
+npm run smoke         # 121 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 
@@ -334,6 +348,8 @@ nudging, per-car laps, manual correction.
   - **Done:** rewinding a turn now resets the clock and leaves it paused.
   - **Done:** the player view is a route with subviews and a bottom tab bar,
     and the first subview is history — the event log read back as sentences.
+  - **Done:** My Racer — a player claims their car on their own phone, and the
+    claim is shared state so two people can't pick the same one.
   - **Done:** a note per car in the results view — usually why they retired.
   - **Done:** race deletion, from race settings and behind a named confirmation
     that says it will rewrite the season table.
