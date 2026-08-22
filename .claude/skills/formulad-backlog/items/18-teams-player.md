@@ -24,9 +24,16 @@ Below the car card in `MyRacerView`:
   as the reverse gear — a rare, hard-to-undo action does not sit next to a
   target a thumb is aimed at all night.
 
-Between game nights there is no race to be in, so **`/season/:seasonId/teams`**
-is the same panel standing alone, reached from the season header. Both render
-the same component; do not fork it.
+Between game nights there is no race to be in, so the same panel stands alone
+outside a race. Both render the same component; do not fork it.
+
+**Amended after shipping:** that standalone home is **`/season/:seasonId/racer`**,
+below the season-level racer picker, not `/season/:seasonId/teams` — which
+redirects there. The reasoning is this item's own, applied one level up: the
+panel has to know who you are, so it belongs under the screen where you say who
+you are rather than beside it. The season subnav is Races / Racer / Standings,
+and Teams is deliberately not a tab on it for exactly the reason it is not a
+fourth tab in-race.
 
 Teams are season-scoped and the player view is race-scoped — `race.seasonId`
 bridges it, with one listener each on the season's teams and members.

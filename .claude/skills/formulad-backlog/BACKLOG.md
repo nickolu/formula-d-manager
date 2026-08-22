@@ -32,6 +32,9 @@ fields exist.
 | 18 | 18 | Teams, player side | **done** | 17 |
 | 19 | 19 | Standings: drivers and constructors | **done** | 14, 17 |
 
+**Every item is done.** What changed after an item shipped is under "Amended
+after shipping"; what is left is under "Still open".
+
 **Land 2 and 5 together in one commit.** They are the same redirect pass and
 splitting them means editing `next.config.ts` and every internal link twice.
 
@@ -71,6 +74,56 @@ Each step leaves the app working, so they can stop at any boundary.
 - **19 last.** It is the only item that reads both a roster and a team, and it
   is the one place where getting the order wrong means shipping a standings
   table that is quietly wrong rather than visibly broken.
+
+## Amended after shipping
+
+Rules that changed **after** their item closed, on the user's call while using
+the thing. These outrank the item specs, which record what was decided at the
+time. Do not re-argue them from a spec file.
+
+- **`dnfPoints` is gone, and a retirement is classified like any other result**
+  (amends 14, and `AGENTS.md`'s scoring section twice). The finishing order
+  already encodes the retirement — first car out is placed last, the next above
+  it — so the order *is* the ranking, and a flat DNF value scored the same fact
+  twice while letting a flag override a placing. A retirement now changes
+  exactly one column: `dnfs`. Points, wins, podiums, `bestFinish` and the
+  countback all read the placing. It had to be all of them: `bestFinish` from
+  the placing while excluding that placing from `podiums` puts a best finish of
+  third and zero podiums on one row.
+- **A sealed race refuses the clock and the turn** (amends `AGENTS.md`'s
+  "`advanceTurn` deliberately does not check the race status"). That decision
+  rested on "no screen offers it", which was false — the player view fell
+  through to the live controls once a race was finished. `refuseIfOver` keeps
+  the hot-path bargain instead of reversing it: the extra read happens only when
+  `currentPlayerId` is null. A finished race also gets its own read-only screen.
+- **Identity is established at the season, and Teams is not a season tab**
+  (amends 15 and 18). Item 15 moved the claim to the season but left the only
+  screen that could make one inside a race. `/season/:id/racer` is that screen;
+  the team panel sits below it, `/season/:id/teams` redirects there, and the
+  season subnav is Races / Racer / Standings. In-race "my racer" falls back to
+  the season claim when the participant is unclaimed there.
+- **A race records `location` and a settable `scheduledAt`.** Free text, because
+  the venue is as often "the pub" as "Nick's". Empty clears it, like a
+  participant note.
+- **`Race.backfilled` has no reader.** The flag stays — it records that the app
+  never timed a race, unrecoverable otherwise — but no view surfaces it: at the
+  table nobody is telling those two kinds of race apart.
+
+## Still open
+
+Nothing here is blocking, and none of it has a spec yet. Give it a numbered item
+when it gets picked up.
+
+- **1b — standings rows overflow at phone width.** See below.
+- **Nothing in the seasons and teams arc has been seen at phone width.** There
+  was no browser on the machine it was built on, so every mobile-first claim in
+  items 13–19 is reasoning rather than observation. The tab bars, the slot grid
+  and the two standings tables are the places to look first. This is the single
+  largest untested assumption in the arc.
+- **Post-game review** — confirm the finishing order before a race is sealed.
+  `AGENTS.md` lists it as the next thing after this arc.
+- **A history view for the season event log.** Deferred in item 13 on purpose:
+  append now, view when someone wants to read it. The data is being written.
 
 ## Reopened
 
