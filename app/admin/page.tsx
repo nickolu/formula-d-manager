@@ -17,7 +17,7 @@ import SeasonsAdmin from "./SeasonsAdmin";
 export default function AdminPage() {
   return (
     <main className="mx-auto w-full max-w-2xl p-8">
-      <Nav standings={false} />
+      <Nav standings={false} section="admin" />
       <h1 className="text-3xl font-semibold">League admin</h1>
       <SeasonsAdmin />
     </main>

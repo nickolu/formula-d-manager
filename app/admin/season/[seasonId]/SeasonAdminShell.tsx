@@ -39,7 +39,7 @@ export default function SeasonAdminShell({
   if (!season) {
     return (
       <main className="mx-auto w-full max-w-3xl p-5 sm:p-8">
-        <Nav standings={false} />
+        <Nav standings={false} section="admin" />
         <p className="text-neutral-400">
           Season not found.{" "}
           <Link href="/admin" className="text-emerald-500">
@@ -52,7 +52,7 @@ export default function SeasonAdminShell({
 
   return (
     <main className="mx-auto w-full max-w-3xl p-5 sm:p-8">
-      <Nav standings={false} />
+      <Nav standings={false} section="admin" />
 
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h1 className="text-3xl font-semibold">{season.name}</h1>

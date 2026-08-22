@@ -869,13 +869,18 @@ async function main() {
     `bravo=${points.get("bravo")}`,
   );
   check("the winner leads the standings", standings[0]?.playerId === "charlie");
+  // A retirement is classified, not excluded: bravo was placed third and that
+  // is third, whatever went wrong on the way. The only column it changes is
+  // dnfs. Splitting this — a best finish of third with no podium — would put
+  // two contradictory numbers on one row.
+  const bravoRow = standings.find((s) => s.playerId === "bravo");
+  check("a retirement's placing is its best finish", bravoRow?.bestFinish === 3, `${bravoRow?.bestFinish}`);
+  check("a retirement in the top three is a podium", bravoRow?.podiums === 1, `${bravoRow?.podiums}`);
+  check("...and is still counted as a DNF", bravoRow?.dnfs === 1);
   check(
-    "a retirement is not counted as a podium",
-    standings.find((s) => s.playerId === "bravo")?.podiums === 0,
-  );
-  check(
-    "a retirement leaves bestFinish unset",
-    standings.find((s) => s.playerId === "bravo")?.bestFinish === null,
+    "...and counts toward the tie countback like any other third",
+    bravoRow?.finishCounts[2] === 1,
+    `${bravoRow?.finishCounts}`,
   );
 
   unsubscribe();

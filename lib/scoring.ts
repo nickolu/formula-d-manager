@@ -88,23 +88,24 @@ export function computeStandings(
       // change a past result.
       const row = table.get(playerId) ?? emptyRow(playerId);
 
-      // Scored on placing whether or not the car finished — the order already
-      // says who broke and when.
+      // A retirement changes exactly one thing: it is counted in `dnfs`.
+      // Everything else reads the placing, because the placing is the
+      // classification — the first car out is placed last, the next above it.
+      // A car classified twelfth finished twelfth; it broke while doing it.
+      //
+      // This has to be all of them or none. Setting `bestFinish` from the
+      // placing while excluding the same placing from `podiums` puts two
+      // contradictory numbers on one row: a best finish of third, and no
+      // podiums.
       row.points += pointsFor(position, config);
       row.races += 1;
-      if (retired) {
-        row.dnfs += 1;
-      } else {
-        if (position === 1) row.wins += 1;
-        if (position <= 3) row.podiums += 1;
-        // Best finish ignores retirements — a car that broke while running
-        // second did not finish second.
-        if (row.bestFinish === null || position < row.bestFinish) {
-          row.bestFinish = position;
-        }
-        row.finishCounts[position - 1] =
-          (row.finishCounts[position - 1] ?? 0) + 1;
+      if (retired) row.dnfs += 1;
+      if (position === 1) row.wins += 1;
+      if (position <= 3) row.podiums += 1;
+      if (row.bestFinish === null || position < row.bestFinish) {
+        row.bestFinish = position;
       }
+      row.finishCounts[position - 1] = (row.finishCounts[position - 1] ?? 0) + 1;
 
       table.set(playerId, row);
     });

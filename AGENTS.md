@@ -184,11 +184,19 @@ retires from the lead is not placed first: it is placed where it went out.
 Seasons written before the change carry a stray `dnfPoints` in Firestore.
 Nothing reads it, and there is no migration, as usual.)
 
-One scoring rule that still looks like a bug and isn't:
+**A retirement changes exactly one column: `dnfs`.** Points, wins, podiums,
+`bestFinish` and the countback all read the placing, because the placing *is*
+the classification — a car classified twelfth finished twelfth; it broke while
+doing it.
 
-- **A retirement doesn't count as a podium and doesn't set `bestFinish`** — a
-  car that broke while running second did not finish second. It scores third's
-  points if it was placed third; it did not *finish* third.
+(This file previously said a retirement "doesn't count as a podium and doesn't
+set `bestFinish`" — a car that broke while running second did not finish
+second. That reasoning belongs to the old model where the order was where a car
+*was on track* when it stopped. Under the ordering actually in use, the first
+car out is placed last and the next above it, so a placing already accounts for
+the retirement rather than flattering it. It has to be all of these columns or
+none: setting `bestFinish` from the placing while excluding the same placing
+from `podiums` puts a best finish of third and zero podiums on one row.)
 
 Ties break on countback (most wins, then most seconds, …), then player id for a
 stable order.
@@ -589,6 +597,10 @@ it lists every race, which is what `/` wants.
   Everything the root used to do (new-race form, per-view links) moved to
   `/admin`, reachable only from `Nav.tsx`; nothing hides it, because there is
   no auth to hide it behind yet and pretending otherwise would be theatre.
+  `Nav` offers the half you are **not** in — "admin" from the player side,
+  "player view" from the commissioner's — so the link is never a no-op pointing
+  at the page you are already on, which is what "admin" was on every admin
+  page.
   `app/RaceList.tsx` renders both with a `variant` prop rather than forking —
   the listener, ordering and empty state are shared and two copies would drift.
   The landing groups live races above a collapsed "Past races", and
