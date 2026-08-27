@@ -8,8 +8,11 @@ import BackfillForm from "./BackfillForm";
  * The season's races.
  *
  * The list comes first because arriving here mid-season usually means reaching
- * for a race that already exists; setting one up is a once-a-week act worth a
- * scroll. Backfill sits below both, collapsed — it is for history, not tonight.
+ * for a race that already exists. Both forms below it are **collapsed**, for
+ * the same reason: each is a screen's worth of inputs used once a week, and
+ * open by default they pushed everything after them off the bottom of a phone.
+ * Setting up tonight's race is one tap; backfilling history is one tap and
+ * further down.
  */
 export default function RacesSection({ seasonId }: { seasonId: string }) {
   return (
