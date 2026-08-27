@@ -84,7 +84,17 @@ export default function NewRaceForm({ seasonId }: { seasonId: string }) {
         playerNames: racing.map(nameOf),
         seasonId,
       });
-      router.push(`/race/${raceId}/player`);
+      // The commissioner's side, not the player's. Creating a race is
+      // commissioner work and it is rarely the last of it — the grid usually
+      // wants a nudge before the flag drops, and the track or the turn length
+      // is often typed wrong the first time. Landing on the player view meant
+      // reaching all of that by going back and finding the race again in a
+      // list you were standing on a moment ago.
+      //
+      // Race settings rather than back to /admin/season/:seasonId: it is the
+      // screen for the thing that was just made, and it renders Nav, so the
+      // player view — where Start race lives — is one tap from it.
+      router.push(`/race/${raceId}/settings`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);

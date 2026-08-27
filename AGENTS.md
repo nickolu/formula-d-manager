@@ -612,6 +612,15 @@ it lists every race, which is what `/` wants.
   belong to a season that exists, so there is no coherent place to create one
   outside a season. `NewRaceForm` and `RaceList` take a `seasonId` rather than
   being forked, the same reasoning as `RaceList`'s `variant`.
+- **Creating a race lands on race settings, not on the player view.** Creating
+  it is commissioner work and it is rarely the last of it — the grid usually
+  wants a nudge before the flag drops, and the track or the turn length is
+  often typed wrong the first time. Landing on `/race/:id/player` meant
+  reaching all of that by going back and finding the race again in a list you
+  were standing on a moment ago. Race settings rather than back to
+  `/admin/season/:seasonId` because it is the screen for the thing that was
+  just made, and it renders `Nav`, so the player view — where Start race lives
+  — stays one tap away.
 - **A race records whose house it was played at.** `Race.location` is free
   text, not a reference to a player: the venue is usually "Nick's" but it is
   just as often "the pub", and modelling it as a player would make the second
