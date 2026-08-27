@@ -134,6 +134,68 @@ the tablet.
 can't silently un-retire a car that broke three rounds ago. Un-retiring goes
 through `setDnf`, which leaves a trail.
 
+**Crossing the line is a third state, and it is derived rather than set.** A
+car whose `lapsCompleted` reaches the race's `lapCount` has **finished**: it
+stops taking turns and it is emphatically **not** a DNF. Before this a live race
+gave a car two states, racing or retired, so the leader coming home had to be
+retired to stop them eating turns — which flagged a win as a retirement in the
+standings' `dnfs` column.
+
+Finishing is a *derivation*, never a flag somebody sets, which is what makes
+raising `lapCount` in race settings put a car back in the race — the right
+answer to "we set the race length wrong". `live.finished` is the **cache** of
+that comparison, struck for exactly the reason `retired` is: `advanceTurn` has
+to skip finished cars from one document read. Three mutations keep it true —
+`completeLap`, `uncompleteLap`, and `updateRaceSettings` when it moves
+`lapCount`. Unlike `retired` it is a **sequence, not a set**: it is ordered by
+the order cars crossed, which makes it the finishing order.
+
+`outOfPlay` in `lib/turn.ts` is the union of the two, and the only place they
+are ever the same thing. Finished cars are skipped **at selection time**, like
+retired ones, and for the same reasons.
+
+**There is no `carFinished` event, deliberately.** What happened at the table is
+that a car completed a lap, and `lapCompleted` is already in the log; "the car
+that completes lap *n* of *n* has finished" is a rule of the system applied to
+it, exactly as "a rewind leaves the race paused with a fresh clock" is. A replay
+derives it. An event here would be a second record of one thing, and it would
+mean the derivation had been abandoned.
+
+**A race with nobody left to take a turn seals itself, and nobody is asked to
+confirm it.** `sealIfDone` fires from whichever mutation accounts for the last
+car — normally `completeLap` or `setDnf`, since that is how a race actually ends
+— and `advanceTurn`/`startRound` keep it as a backstop for a race that predates
+all of this, where retiring everyone was the only way to run out of cars. It
+appends the same ordinary `raceFinished` a manual finish does, through the same
+`seal()` helper, so there is one place the sealed state is written.
+
+The order it seals with is `proposedFinishingOrder`: crossings in the order they
+happened, then anyone still running by standings, then retirees **reversed** —
+first car out placed last, which is the classification rule the scoring section
+already states. Every part of it is something the table entered; nothing invents
+a placing. It stays a derivation rather than a rule, since `finishRace` and
+`amendRaceResult` still validate whatever order they are handed.
+
+There is deliberately **no third phase**. A confirmation step was specced —
+park on nobody's turn, offer the order, wait for a tap — and rejected: it puts a
+tap on every game night to guard against a mis-tap that is one tap to undo
+afterwards. So "nobody's turn" still means exactly two things, and every view's
+existing rule holds unchanged. What replaces the confirmation is `reopenRace`.
+
+**`reopenRace` is the undo, and it is the price of not confirming.** It sets the
+race back to `live`, takes `result` off the race document and `finalPosition`
+off the participants, and hands it back **through the interstitial** — paused,
+full clock, nobody's turn, because guessing whose turn it was would invent
+something nobody recorded. It is not an amendment: `amendRaceResult` fixes an
+order that was merely wrong, while this is for a race that is *not over*, which
+is what a mis-tapped final lap on the last running car produces and what no
+amendment can express. And it edits no history — the `raceFinished` event stays
+exactly where it is, and what is undone is the cache, the same licence
+`amendRaceResult` takes. Unlike finishing it **does** append an event
+(`raceReopened`): a commissioner deciding something is not a rule applied to
+other facts, and nothing else in the log would record it. It lives in race
+settings, beside delete, because that is where the commissioner's undoing is.
+
 ## The timer is state, not a process
 
 There is no countdown running anywhere. The live doc holds `turnStartedAt`
@@ -781,7 +843,16 @@ it lists every race, which is what `/` wants.
   that missed, which is the worst available answer to that question.
 - **Nobody's turn means two different things** — the race is over, or it is
   between rounds. Every view discriminates on `race.status === "complete"`,
-  never on the null `currentPlayerId`. `finishRace` nulls it too.
+  never on the null `currentPlayerId`. `finishRace` nulls it too. A race that
+  runs out of cars deliberately did **not** become a third meaning: it seals
+  itself, so it is the first one.
+- **A finished car is drawn as finished, never as retired.** A chequered flag
+  and emerald text in the player list, the track, the big screen and the
+  results view — never the retirement's strike-through. They are opposite
+  facts, and on the results screen the difference becomes a season's points.
+  `+lap` is disabled on a finished car, since there is no lap left to complete;
+  the undo for a mis-tapped final lap is the results view's `−`, which is where
+  every other mis-tapped lap is undone.
 - **`joinRace` adds to `positionOrder` only, never `roundOrder`.** A late
   arrival starts taking turns *next* round, when the rollover snapshots
   standings — the same rule as an overtake. Splicing a car into a round already
@@ -959,7 +1030,7 @@ it lists every race, which is what `/` wants.
 ## Verification
 
 ```bash
-npm run smoke         # 262 end-to-end checks against the real project
+npm run smoke         # 287 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 
@@ -1047,8 +1118,13 @@ nudging, per-car laps, manual correction.
     component as the television behind a `variant`, sized in viewport units so
     it rides the rotation between portrait and landscape with no breakpoint
     and no change to the television.
-  - **Next:** post-game review to confirm the finishing order before a race is
-    sealed.
+  - **Done:** crossing the line. A car that runs its last lap finishes —
+    derived from `lapsCompleted >= lapCount`, so it is not a retirement and
+    lengthening the race puts it back in — and a race with nobody left seals
+    itself, with `reopenRace` on race settings as the undo.
+  - **Next:** post-game review — a confirmation of the finishing order before a
+    race is sealed was deliberately *not* built with the item above; if it
+    comes back it is as a review screen, not a gate on every game night.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
     rules tighten — right now any signed-in caller can write anything, which
     suits a living room and not a public site. Decided: **Google sign-in**, with

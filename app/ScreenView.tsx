@@ -139,8 +139,12 @@ export default function ScreenView({
     );
   }
 
-  // Absent on races created before retirement was modelled.
+  // Both absent on races created before their features existed.
   const retired = new Set(live.retired ?? []);
+  // Cars that have crossed the line. Marked with the flag, never with the
+  // retirement's strike-through — from across a room those two have to be
+  // instantly different things.
+  const home = new Set(live.finished ?? []);
 
   // Nobody's turn means two different things — the race is over, or it is
   // between rounds. Discriminate on status, never on the null player. A big
@@ -168,7 +172,13 @@ export default function ScreenView({
               <li
                 key={id}
                 ref={registerRoundRow(id)}
-                className={retired.has(id) ? "text-neutral-700 line-through" : undefined}
+                className={
+                  retired.has(id)
+                    ? "text-neutral-700 line-through"
+                    : home.has(id)
+                      ? "text-emerald-400"
+                      : undefined
+                }
               >
                 <Pos>{i + 1}</Pos>
                 {nameOf(id)}
@@ -225,6 +235,7 @@ export default function ScreenView({
           const alreadyMoved = roundIdx !== -1 && roundIdx < turnIndex;
           const laps = participants.get(id)?.lapsCompleted ?? 0;
           const isOut = retired.has(id);
+          const isHome = home.has(id);
 
           return (
             <li
@@ -233,15 +244,19 @@ export default function ScreenView({
               className={
                 isOut
                   ? "text-neutral-700 line-through"
-                  : id === live.currentPlayerId
-                    ? "text-white"
-                    : alreadyMoved
-                      ? "text-neutral-600"
-                      : undefined
+                  : isHome
+                    ? "text-emerald-400"
+                    : id === live.currentPlayerId
+                      ? "text-white"
+                      : alreadyMoved
+                        ? "text-neutral-600"
+                        : undefined
               }
             >
               <span className="text-neutral-600">{i + 1}.</span> {nameOf(id)}
-              <span className="ml-2 text-[length:var(--s-sub)] text-neutral-600">L{laps}</span>
+              <span className="ml-2 text-[length:var(--s-sub)] text-neutral-600">
+                {isHome ? "🏁" : `L${laps}`}
+              </span>
             </li>
           );
         })}

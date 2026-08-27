@@ -36,6 +36,7 @@ import {
   raceDoc,
   releaseRacer,
   removePlayer,
+  reopenRace,
   resumeTurn,
   rewindTurn,
   setCarStatus,
@@ -864,6 +865,158 @@ async function main() {
     "a retirement scores its placing like any other result",
     pointsFor(3, DEFAULT_SCORING) === DEFAULT_SCORING.positionPoints[2],
   );
+
+  console.log("\ncrossing the line — a race that ends itself:");
+  const lineId = await createRace({
+    track: "SMOKE-TEST line",
+    lapCount: 2,
+    turnSeconds: TURN_SECONDS,
+    playerNames: ["Alpha", "Bravo", "Charlie"],
+    seasonId,
+  });
+  // The interstitial is orthogonal to this and already covered above; off here
+  // so a rollover lands straight on the next car.
+  await updateRaceSettings(lineId, { settings: { betweenRounds: false } }, { source: "manual" });
+  await startRace(lineId, { source: "manual" });
+
+  const lineLive = async () => (await getDoc(liveDoc(lineId))).data() as LiveState;
+  const lineRace = async () => (await getDoc(raceDoc(lineId))).data() as Race;
+  const lineTypes = async () =>
+    (await getDocs(collection(db, "races", lineId, "events"))).docs.map(
+      (d) => d.data().type as string,
+    );
+
+  await completeLap(lineId, "alpha", { source: "manual" });
+  check(
+    "a lap short of the race length finishes nobody",
+    ((await lineLive()).finished ?? []).length === 0,
+  );
+
+  await completeLap(lineId, "alpha", { source: "manual" });
+  const lineCrossed = await lineLive();
+  check(
+    "the lap that reaches lapCount finishes the car",
+    (lineCrossed.finished ?? []).join(",") === "alpha",
+    (lineCrossed.finished ?? []).join(","),
+  );
+  // The whole point of the feature: before this, stopping a car meant DNF.
+  check("...and does not retire it", !(lineCrossed.retired ?? []).includes("alpha"));
+  check("...and does not end the race", (await lineRace()).status === "live");
+  check(
+    "finishing appends no event of its own — it is derived from the lap",
+    !(await lineTypes()).includes("carFinished"),
+  );
+
+  // alpha is on pole and has just finished; the turn must step over them.
+  await advanceTurn(lineId, { source: "manual" });
+  await advanceTurn(lineId, { source: "manual" });
+  await advanceTurn(lineId, { source: "manual" });
+  const lineSkipped = await lineLive();
+  check(
+    "a finished car is skipped at the round rollover",
+    lineSkipped.currentPlayerId === "bravo" && lineSkipped.currentRound === 2,
+    `${lineSkipped.currentPlayerId} in round ${lineSkipped.currentRound}`,
+  );
+  check(
+    "...without being taken out of roundOrder",
+    lineSkipped.roundOrder.includes("alpha"),
+    lineSkipped.roundOrder.join(","),
+  );
+
+  // Finishing is derived, so moving the line moves who is past it.
+  await updateRaceSettings(lineId, { lapCount: 3 }, { source: "manual" });
+  check(
+    "lengthening the race puts a finished car back in it",
+    ((await lineLive()).finished ?? []).length === 0,
+  );
+  await updateRaceSettings(lineId, { lapCount: 2 }, { source: "manual" });
+  check(
+    "shortening it finishes everyone already past the line",
+    ((await lineLive()).finished ?? []).join(",") === "alpha",
+  );
+
+  await uncompleteLap(lineId, "alpha", { source: "manual" });
+  check(
+    "taking back a mis-tapped final lap un-finishes the car",
+    ((await lineLive()).finished ?? []).length === 0,
+  );
+  await completeLap(lineId, "alpha", { source: "manual" });
+
+  await completeLap(lineId, "bravo", { source: "manual" });
+  await completeLap(lineId, "bravo", { source: "manual" });
+  check(
+    "the crossing order is the order they crossed",
+    ((await lineLive()).finished ?? []).join(",") === "alpha,bravo",
+    ((await lineLive()).finished ?? []).join(","),
+  );
+  check("one car still running keeps the race alive", (await lineRace()).status === "live");
+
+  // Retiring the last running car used to be a dead end: advanceTurn threw
+  // "Every car has retired" and nothing could move the race on.
+  await setDnf(lineId, "charlie", true, { source: "manual" });
+  const ended = await lineRace();
+  check("the last car accounted for seals the race", ended.status === "complete", ended.status);
+  check(
+    "it seals with the order the race recorded — crossings first, retirements last",
+    ended.result?.order.join(",") === "alpha,bravo,charlie",
+    ended.result?.order.join(","),
+  );
+  check(
+    "a finished car is not a DNF",
+    ended.result?.dnf.join(",") === "charlie",
+    ended.result?.dnf.join(","),
+  );
+  check(
+    "an automatic seal appends one ordinary raceFinished",
+    (await lineTypes()).filter((t) => t === "raceFinished").length === 1,
+  );
+  const lineParticipants = new Map(
+    (await getDocs(collection(db, "races", lineId, "participants"))).docs.map(
+      (d) => [d.id, d.data() as Participant],
+    ),
+  );
+  check(
+    "...and writes the final positions like any other finish",
+    lineParticipants.get("alpha")?.finalPosition === 1 &&
+      lineParticipants.get("charlie")?.finalPosition === 3,
+  );
+
+  // Nobody confirms the seal, so the undo has to be real.
+  await reopenRace(lineId, { source: "manual" });
+  const reopened = await lineRace();
+  const reopenedLive = await lineLive();
+  check("a sealed race reopens", reopened.status === "live", reopened.status);
+  check("...and the result comes off the race document", reopened.result === undefined);
+  check(
+    "...leaving the laps and retirements exactly as they were",
+    (reopenedLive.finished ?? []).join(",") === "alpha,bravo" &&
+      (reopenedLive.retired ?? []).join(",") === "charlie",
+  );
+  check(
+    "...on nobody's turn, with a full clock",
+    reopenedLive.phase === "betweenRounds" &&
+      reopenedLive.currentPlayerId === null &&
+      readTimer(reopenedLive, Date.now()).isPaused,
+  );
+  check(
+    "...and the final positions are cleared",
+    ((await getDoc(participantDoc(lineId, "alpha"))).data() as Participant)
+      .finalPosition === null,
+  );
+  check("reopening is logged", (await lineTypes()).includes("raceReopened"));
+  await rejects(
+    () => reopenRace(raceId, { source: "manual" }),
+    "reopening a race that is not finished is refused",
+  );
+
+  // The backstop: a race with nobody left seals on the next turn rather than
+  // throwing, which is what the old "Every car has retired" did.
+  await advanceTurn(lineId, { source: "manual" });
+  check(
+    "a race with nobody left seals on the next turn instead of throwing",
+    (await lineRace()).status === "complete",
+  );
+  await deleteRace(lineId);
 
   console.log("\nfinishing the race:");
   await rejects(

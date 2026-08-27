@@ -349,6 +349,12 @@ export interface LiveState {
    * "betweenRounds" is nobody's turn on purpose: every car has moved, the next
    * round's order has been snapshotted, and the table is looking at it before
    * the clock starts again.
+   *
+   * There is deliberately no third value for "every car has finished". A race
+   * with nobody left to take a turn **seals itself**, so that state is
+   * `races/{id}.status === "complete"` and not a phase — nobody's turn still
+   * means exactly two things, and the rule that every view discriminates on the
+   * race status rather than on the null currentPlayerId is unchanged.
    */
   phase?: "turn" | "betweenRounds";
   /**
@@ -368,6 +374,27 @@ export interface LiveState {
    * Optional: races created before retirement was modelled simply lack it.
    */
   retired?: PlayerId[];
+  /**
+   * Cars that have crossed the line, **in the order they crossed it** — so this
+   * list is the finishing order, not a set.
+   *
+   * Finishing is *derived*, never set by hand: a car is finished when its
+   * `lapsCompleted` reaches the race's `lapCount`. This field is the **cache**
+   * of that comparison, struck for exactly the reason `retired` above is —
+   * advanceTurn has to skip finished cars from a single document read, and
+   * every open listener gets the state for free. The three mutations that can
+   * move either side of the comparison keep it true: completeLap, uncompleteLap
+   * and updateRaceSettings when it changes lapCount.
+   *
+   * There is deliberately no `carFinished` event. What happened at the table is
+   * that a car completed a lap, and that is already in the log; "the car that
+   * completes lap n of n has finished" is a rule of the system applied to it,
+   * the same way a rewind's paused clock is. A replay derives both.
+   *
+   * Optional: races created before this existed simply lack it, and every
+   * reader treats absence as "nobody has finished".
+   */
+  finished?: PlayerId[];
   /**
    * The outgoing roundOrder, saved at each rollover. Rollover overwrites
    * roundOrder with a fresh snapshot of positionOrder, which would otherwise
@@ -623,6 +650,20 @@ export interface CorrectionEvent extends BaseEvent {
   note: string;
 }
 
+/**
+ * A sealed race was handed back to the table.
+ *
+ * The counterweight to a race that ends itself: without confirmation before the
+ * seal there has to be a way back after it, and it is a real thing that
+ * happened rather than a rule applied to other facts — so unlike finishing, it
+ * gets an event.
+ */
+export interface RaceReopenedEvent extends BaseEvent {
+  type: "raceReopened";
+  /** The result that was cleared, so the log still holds what was sealed. */
+  order: PlayerId[];
+  dnf: PlayerId[];
+}
 export type RaceEvent =
   | RaceCreatedEvent
   | RaceStartedEvent
@@ -644,6 +685,7 @@ export type RaceEvent =
   | TurnPausedEvent
   | TurnResumedEvent
   | RaceFinishedEvent
+  | RaceReopenedEvent
   | RaceResultAmendedEvent
   | CorrectionEvent;
 
