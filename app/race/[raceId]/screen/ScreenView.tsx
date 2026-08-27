@@ -9,6 +9,10 @@ import {
 } from "@/lib/hooks";
 import { formatRemaining, readTimer } from "@/lib/timer";
 import StaleRace from "@/app/StaleRace";
+import { useFlipOrder } from "@/app/useFlipOrder";
+
+/** Stable, so the flip hook does not re-measure on every repaint tick. */
+const NO_ORDER: string[] = [];
 
 export default function ScreenView({ raceId }: { raceId: string }) {
   const { live, loading, error } = useLiveState(raceId);
@@ -16,6 +20,11 @@ export default function ScreenView({ raceId }: { raceId: string }) {
   const players = usePlayers();
   const participants = useParticipants(raceId);
   const now = useNow();
+
+  // Called unconditionally, above the early returns, because hooks are — and
+  // one per list because they measure different rows in different branches.
+  const registerRoundRow = useFlipOrder(live?.roundOrder ?? NO_ORDER);
+  const registerPositionRow = useFlipOrder(live?.positionOrder ?? NO_ORDER);
 
   const timer = readTimer(live, now);
   const nameOf = (id: string) => players.get(id)?.displayName ?? id;
@@ -59,9 +68,18 @@ export default function ScreenView({ raceId }: { raceId: string }) {
           Round {live.currentRound - 1} done
         </p>
         <p className="text-7xl font-semibold">Check the order</p>
+        {/* The order the round will actually run in — which, between rounds,
+            is what a drag on the tablet is editing. It slides rather than
+            redrawing: from across the room a list that has just changed and a
+            list that was always like that are the same picture, and the
+            argument at the table is about exactly which one this is. */}
         <ol className="flex flex-col gap-3 text-5xl text-neutral-300">
           {live.roundOrder.map((id, i) => (
-            <li key={id} className={retired.has(id) ? "text-neutral-700 line-through" : undefined}>
+            <li
+              key={id}
+              ref={registerRoundRow(id)}
+              className={retired.has(id) ? "text-neutral-700 line-through" : undefined}
+            >
               <span className="mr-6 text-neutral-600">{i + 1}</span>
               {nameOf(id)}
             </li>
@@ -115,6 +133,7 @@ export default function ScreenView({ raceId }: { raceId: string }) {
           return (
             <li
               key={id}
+              ref={registerPositionRow(id)}
               className={
                 isOut
                   ? "text-neutral-700 line-through"
