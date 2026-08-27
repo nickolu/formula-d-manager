@@ -1,4 +1,4 @@
-import ScreenView from "./ScreenView";
+import ScreenView from "@/app/ScreenView";
 
 // params is a Promise in Next 16 and must be awaited. A client component page
 // cannot be async, so this server page unwraps it and hands the id to a client
@@ -9,5 +9,5 @@ export default async function ScreenPage({
   params: Promise<{ raceId: string }>;
 }) {
   const { raceId } = await params;
-  return <ScreenView raceId={raceId} />;
+  return <ScreenView raceId={raceId} variant="big" />;
 }

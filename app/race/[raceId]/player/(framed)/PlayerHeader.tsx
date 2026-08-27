@@ -13,8 +13,13 @@ import { useRace } from "@/lib/hooks";
  * something, and a screen with no exit is a trap.
  *
  * Not app/Nav.tsx, which stays opt-in: nav chrome would put standings and
- * admin links in front of a player mid-game. This is one row — back, track,
- * laps — and nothing else.
+ * admin links in front of a player mid-game. This is one row — back, screen,
+ * track, laps — and nothing else.
+ *
+ * The screen link is here rather than in PlayerTabs because /player/screen is
+ * not a framed subview: it drops the header and the tab bar so a phone held
+ * sideways is all clock. PlayerTabs stays three tabs, and a tab that unmounts
+ * the bar it lives in would be a strange thing to leave depressed.
  */
 export default function PlayerHeader({ raceId }: { raceId: string }) {
   const { race } = useRace(raceId);
@@ -27,6 +32,14 @@ export default function PlayerHeader({ raceId }: { raceId: string }) {
         className="shrink-0 px-3 py-2 text-sm text-neutral-500 active:text-white"
       >
         ‹ Races
+      </Link>
+
+      <Link
+        href={`/race/${raceId}/player/screen`}
+        aria-label="Full-screen timer"
+        className="shrink-0 px-3 py-2 text-sm text-neutral-500 active:text-white"
+      >
+        ⛶ Screen
       </Link>
 
       <div className="min-w-0 flex-1 text-right">
