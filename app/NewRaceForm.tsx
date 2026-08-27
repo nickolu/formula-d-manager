@@ -24,6 +24,8 @@ export default function NewRaceForm({ seasonId }: { seasonId: string }) {
   const { members, loading } = useSeasonMembers(seasonId);
   const players = usePlayers();
 
+  // Collapsed by default. See the early return below for why.
+  const [open, setOpen] = useState(false);
   const [track, setTrack] = useState("");
   const [location, setLocation] = useState("");
   // Defaults to today, which is what a race being set up at the table is.
@@ -99,6 +101,30 @@ export default function NewRaceForm({ seasonId }: { seasonId: string }) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
     }
+  }
+
+  // Collapsed by default, the same as the backfill form below it.
+  //
+  // This form is the longest thing on the page — track, location, date, laps,
+  // turn length, the whole roster as a drag list, and an add-a-member box — and
+  // it is opened once a week, while the race list above it is what the page is
+  // usually reached for. Open, it pushed the backfill form and everything after
+  // it off the bottom of a phone.
+  //
+  // The component stays mounted while it is shut, so a half-filled form
+  // survives a mis-tap on Cancel, and the roster listener stays open — which
+  // is what makes opening it instant rather than a flash of "Loading the
+  // roster…".
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-6 w-full rounded border border-emerald-900 py-3 text-sm text-emerald-500 active:bg-emerald-950/40"
+      >
+        + New race
+      </button>
+    );
   }
 
   return (
@@ -212,13 +238,25 @@ export default function NewRaceForm({ seasonId }: { seasonId: string }) {
         <AddMember seasonId={seasonId} label="Someone new at the table" />
       </div>
 
-      <button
-        type="submit"
-        disabled={busy || racing.length === 0}
-        className="rounded bg-emerald-600 py-3 text-lg font-medium disabled:opacity-50"
-      >
-        {busy ? "Creating…" : `Create race (${racing.length})`}
-      </button>
+      <div className="flex gap-2">
+        {/* type="button" is load-bearing: a <button> with no type inside a
+            <form> is a submit button, and this one would create the race. */}
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          disabled={busy}
+          className="rounded border border-neutral-700 px-5 py-3 disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={busy || racing.length === 0}
+          className="flex-1 rounded bg-emerald-600 py-3 text-lg font-medium disabled:opacity-50"
+        >
+          {busy ? "Creating…" : `Create race (${racing.length})`}
+        </button>
+      </div>
 
       {error && <p className="text-red-500">{error}</p>}
     </form>
