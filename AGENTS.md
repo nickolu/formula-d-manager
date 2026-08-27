@@ -564,7 +564,8 @@ it lists every race, which is what `/` wants.
 - Every event carries `source: "manual" | "chat" | "system"` so chat-entered
   mistakes stay traceable.
 - The race screens are `/race/:id/player` (what a player looks at, on a phone
-  or the shared tablet), `/race/:id/screen` (the big screen), and two
+  or the shared tablet), `/race/:id/screen` (the big screen, which also renders
+  at `/race/:id/player/screen` for a phone — see below), and two
   commissioner ones: `/race/:id/results` (corrections and finishing) and
   `/race/:id/settings`. **Race settings is deliberately not a player subview** —
   it is commissioner work, it does not belong in a tab bar a player thumbs
@@ -693,6 +694,48 @@ it lists every race, which is what `/` wants.
   `rewindTurn` treats the interstitial as a boundary crossing and reuses that
   branch — in the interstitial `roundOrder` is already the *next* round's
   snapshot, so stepping back within it would be meaningless.
+- **The big screen renders on a phone too, from one component.**
+  `app/ScreenView.tsx` serves `/race/:id/screen` (the television) and
+  `/race/:id/player/screen` (the phone already in your hand) behind a
+  `variant`, the same bargain as `RaceList`: the listener, the four states and
+  every rule about what "nobody's turn" means are shared, and two copies would
+  drift. The only difference the variant makes is a way back to the player
+  view, because a screen with no exit is a trap and a television has no thumb
+  to offer one to.
+
+  **The phone route sits outside the player layout, in a route group.**
+  `app/race/[raceId]/player/(framed)/` now holds the layout and the three
+  framed subviews; `player/screen/` is its sibling and inherits none of it.
+  `PlayerHeader` plus the fixed tab bar cost about a third of a phone held
+  sideways, and this view exists to be nothing but a clock. Route groups are
+  elided from the URL, so every existing path is byte-identical — that
+  restructuring is the whole reason it is a group rather than a `usePathname`
+  check inside the chrome, which could not have removed the layout's own
+  padding anyway. The way *in* is a link in `PlayerHeader` rather than a
+  fourth tab: `PlayerTabs` stays three tabs, and a tab that unmounts the bar
+  it lives in would be a strange thing to leave depressed.
+
+  **There is no breakpoint anywhere in that file, deliberately.** Every size
+  is `clamp(floor, min(Nvw, Mvh), cap)`. A `md:` flip jumps at one width; a
+  `min(vw, vh)` tracks a phone turning through the rotation continuously, and
+  the `min()` swaps the binding constraint from height to width on its own as
+  the aspect ratio crosses over. **The cap is what protects the television:**
+  every real big-screen resolution lands above it, so `big` clamps to exactly
+  the fixed sizes it used before — 224px of timer, 30px of standings, 40px of
+  padding at 1080p, measured. Sizes that wrap or hold one word get a looser
+  `vw` term than the timer does, since only the timer has to fit *n* monospace
+  characters across.
+
+  **A list of N rows is the one thing a viewport ratio cannot size**, so
+  `listScale(n)` divides the `vh` term by the field. The coefficient is chosen
+  so a grid of eight still clamps to the old fixed size at 1080p; below that a
+  phone shrinks the rows instead of pushing half the order below the fold,
+  which on the screen whose entire job is "check the order" would be the
+  feature failing. `min-h-dvh` rather than `min-h-screen` for the same class
+  of reason: `vh` is the tallest a phone viewport ever gets, so the standings
+  would hide under the browser's own chrome, and on a desktop the two units
+  are identical.
+
 - **The player view has a header saying which race it is, and a way out.** A
   player arrives cold from a list of races, so the view has to name the race —
   and it has to be possible to have tapped the wrong one. The paradigm that the
@@ -1000,6 +1043,10 @@ nudging, per-car laps, manual correction.
     before the write lands, a duplicate or simultaneous tap is a no-op instead
     of skipping a car, a nudge between rounds actually changes the round, and
     the big screen animates the swap.
+  - **Done:** the big screen on a phone — `/race/:id/player/screen`, the same
+    component as the television behind a `variant`, sized in viewport units so
+    it rides the rotation between portrait and landscape with no breakpoint
+    and no change to the television.
   - **Next:** post-game review to confirm the finishing order before a race is
     sealed.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the
