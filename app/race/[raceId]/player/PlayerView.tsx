@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 
+import { Timestamp } from "firebase/firestore";
 import { useState, useSyncExternalStore } from "react";
 import {
   useLiveState,
@@ -22,6 +23,13 @@ import {
   startRound,
 } from "@/lib/race";
 import { formatRemaining, readTimer } from "@/lib/timer";
+import {
+  projectAdvance,
+  projectStartRound,
+  turnKey,
+  type TurnProjection,
+} from "@/lib/turn";
+import type { LiveState } from "@/lib/types";
 import ReorderableList from "@/app/ReorderableList";
 import StaleRace from "@/app/StaleRace";
 import TrackView from "./TrackView";
@@ -55,15 +63,76 @@ function writeMode(next: StandingsMode) {
   modeListeners.forEach((l) => l());
 }
 
+/**
+ * A turn change that has been tapped but not yet streamed back.
+ *
+ * Firestore latency-compensates plain writes but **not transactions**, and
+ * every mutation here is one — so the device that taps Next turn is the last
+ * one in the room to see it happen. The big screen, a passive listener, gets
+ * the push and moves; the tablet that was tapped sits on the old turn with a
+ * running clock for the whole round trip, and on house wifi that is long
+ * enough to read as a missed tap. Which it then gets: somebody taps again, and
+ * because a second advance from a doc that has already moved is a *legal*
+ * advance, a car quietly loses its turn.
+ *
+ * So the tap renders at once, exactly as CarStatusCard holds a tapped peg, and
+ * the same release rule applies — the hold is dropped only when keeping it
+ * would be wrong. `before`/`after` are turnKeys, which is what makes the three
+ * cases separable without waiting on the write: ours landed, or somebody else
+ * moved the turn out from under us, or nothing has arrived yet.
+ */
+interface PendingTurn {
+  /** Whose turn it was when the button was tapped. */
+  before: string;
+  /** Whose turn it should be once the write lands. */
+  after: string;
+  /** The live-doc fields the projected turn overrides while it is held. */
+  state: Pick<
+    LiveState,
+    | "phase"
+    | "currentPlayerId"
+    | "currentRound"
+    | "roundOrder"
+    | "turnStartedAt"
+    | "turnDurationMs"
+  >;
+}
+
 export default function PlayerView({ raceId }: { raceId: string }) {
-  const { live, loading, error } = useLiveState(raceId);
+  const { live: streamed, loading, error } = useLiveState(raceId);
   const { race } = useRace(raceId);
   const players = usePlayers();
   const participants = useParticipants(raceId);
   const now = useNow();
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<PendingTurn | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const mode = useSyncExternalStore(subscribeMode, readMode, () => "list");
+
+  // Reconciled during render rather than in an effect, exactly as the drag's
+  // dropped order is: this is adjusting state because a prop arrived, which
+  // React does in place without committing the intermediate pass.
+  //
+  // Releasing on the write's promise instead would be a flicker — a
+  // transaction resolves when the server commits, which is *before* the
+  // snapshot carrying that commit arrives, so for one frame the screen would
+  // fall back to the turn we just left. So the hold is dropped only when
+  // keeping it would be wrong: our turn landed, or somebody else moved the
+  // turn out from under us. When the stream merely catches up with what is
+  // already on screen, nothing happens at all.
+  let held = pending;
+  if (
+    held &&
+    (!streamed ||
+      turnKey(streamed) === held.after ||
+      turnKey(streamed) !== held.before)
+  ) {
+    setPending(null);
+    held = null;
+  }
+
+  const live: LiveState | null =
+    held && streamed ? { ...streamed, ...held.state } : streamed;
 
   const timer = readTimer(live, now);
   const nameOf = (id: string) => players.get(id)?.displayName ?? id;
@@ -94,6 +163,63 @@ export default function PlayerView({ raceId }: { raceId: string }) {
       setActionError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * A turn change: projected and shown immediately, then written.
+   *
+   * No busy flag — dimming the whole screen for the round trip is most of what
+   * made a tap feel like it had missed. The primary button disables itself
+   * while a change is held instead, which is a fifth of a second and reads as
+   * nothing, because the button has already relabelled itself with the turn
+   * that is coming.
+   *
+   * The token passed to the mutation is the turn we were *looking at*, so if
+   * another phone got there first this write is a no-op rather than a second
+   * advance past a car that never moved.
+   */
+  async function commitTurn(
+    project: (live: LiveState) => TurnProjection,
+    write: (expect: string) => Promise<boolean>,
+  ) {
+    if (!live) return;
+    setActionError(null);
+
+    const before = turnKey(live);
+    let next: TurnProjection;
+    try {
+      next = project(live);
+    } catch (e) {
+      // projectAdvance throws where advanceTurn throws — "every car has
+      // retired" and friends. Report it and write nothing.
+      setActionError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+
+    setPending({
+      before,
+      after: turnKey(next),
+      state: {
+        phase: next.phase,
+        currentPlayerId: next.currentPlayerId,
+        currentRound: next.currentRound,
+        roundOrder: next.roundOrder,
+        // The transaction anchors the clock with a server timestamp; the hold
+        // has only the local one. Skew is cosmetic for an ambient timer and
+        // this lasts a round trip — the streamed anchor replaces it.
+        turnStartedAt:
+          next.phase === "turn" ? Timestamp.fromMillis(Date.now()) : null,
+        turnDurationMs: live.turnDurationDefaultMs ?? live.turnDurationMs,
+      },
+    });
+
+    try {
+      await write(before);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+      // The undo. The streamed turn underneath was never wrong.
+      setPending(null);
     }
   }
 
@@ -246,6 +372,24 @@ export default function PlayerView({ raceId }: { raceId: string }) {
    * the hardest place to hit by accident one-handed, and looks like a link
    * rather than a control you are meant to reach for.
    */
+  /**
+   * Where a failure says so.
+   *
+   * This used to render at the very bottom of the page, under the standings
+   * and the pause button — off-screen on a phone, on the one screen where the
+   * question being asked is "did my tap do anything?". A refused turn was
+   * indistinguishable from a tap that missed, which is the worst possible
+   * answer to that question.
+   */
+  const problem = actionError && (
+    <p
+      role="alert"
+      className="rounded-2xl border border-red-900 bg-red-950/60 px-4 py-3 text-center text-red-300"
+    >
+      {actionError}
+    </p>
+  );
+
   const backATurn = (
     <div className="-mt-2 flex justify-end">
       <button
@@ -395,6 +539,8 @@ export default function PlayerView({ raceId }: { raceId: string }) {
   if (between) {
     return (
       <main className="flex flex-col gap-4 p-4">
+        {problem}
+
         <div className="text-center">
           <p className="text-xs uppercase tracking-widest text-neutral-500">
             Round {live.currentRound - 1} done
@@ -408,22 +554,28 @@ export default function PlayerView({ raceId }: { raceId: string }) {
         {backATurn}
 
         <button
-          onClick={() => run(() => startRound(raceId, { source: "manual" }))}
-          disabled={busy}
-          className="rounded-3xl bg-emerald-600 py-8 text-3xl font-bold active:bg-emerald-700 disabled:opacity-50"
+          onClick={() =>
+            commitTurn(projectStartRound, (expect) =>
+              startRound(raceId, { source: "manual" }, expect),
+            )
+          }
+          // Held rather than dimmed: the screen has already moved on, so
+          // fading the button would be the only thing suggesting it had not.
+          disabled={busy || held !== null}
+          className="rounded-3xl bg-emerald-600 py-8 text-3xl font-bold active:bg-emerald-700 disabled:bg-emerald-700"
         >
           Start round {live.currentRound}
         </button>
 
         {standings}
-
-        {actionError && <p className="text-center text-red-500">{actionError}</p>}
       </main>
     );
   }
 
   return (
     <main className="flex flex-col gap-4 p-4">
+      {problem}
+
       <div className="flex items-baseline justify-between text-neutral-400">
         <span className="text-xl">Round {live.currentRound}</span>
         <span className="font-mono text-2xl tabular-nums">
@@ -444,9 +596,16 @@ export default function PlayerView({ raceId }: { raceId: string }) {
       </div>
 
       <button
-        onClick={() => run(() => advanceTurn(raceId, { source: "manual" }))}
-        disabled={busy}
-        className="rounded-3xl bg-emerald-600 py-10 text-4xl font-bold active:bg-emerald-700 disabled:opacity-50"
+        onClick={() =>
+          commitTurn(projectAdvance, (expect) =>
+            advanceTurn(raceId, { source: "manual" }, expect),
+          )
+        }
+        // Only while a change is held — a fifth of a second, during which the
+        // label already names the turn that is coming. Dimming it is what made
+        // the old round trip read as a dead button, so it keeps its colour.
+        disabled={busy || held !== null}
+        className="rounded-3xl bg-emerald-600 py-10 text-4xl font-bold active:bg-emerald-700 disabled:bg-emerald-700"
       >
         Next turn
         <span className="mt-2 block text-base font-normal opacity-80">
@@ -471,8 +630,6 @@ export default function PlayerView({ raceId }: { raceId: string }) {
       >
         {timer.isPaused ? "Resume" : "Pause"}
       </button>
-
-      {actionError && <p className="text-center text-red-500">{actionError}</p>}
     </main>
   );
 }

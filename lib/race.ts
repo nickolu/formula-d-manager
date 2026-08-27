@@ -15,6 +15,12 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { carStatusSpecFor, gearsFor, playerId as slugFor, startOf } from "./setup";
+import {
+  nextRunner,
+  projectAdvance,
+  projectStartRound,
+  turnKey,
+} from "./turn";
 import type {
   Actor,
   LiveState,
@@ -375,18 +381,6 @@ export async function removePlayer(
  * actually started is what makes un-retiring reversible mid-round, and it keeps
  * the turnIndex/alreadyMoved arithmetic in the views working unchanged.
  */
-function nextRunner(
-  order: PlayerId[],
-  retired: Set<PlayerId>,
-  from: number,
-  step: 1 | -1,
-) {
-  for (let i = from; i >= 0 && i < order.length; i += step) {
-    if (!retired.has(order[i])) return i;
-  }
-  return -1;
-}
-
 /**
  * Steps through the current round's frozen order. Running off the end means
  * every car has moved once: the round ends, and the next round's order is
@@ -395,75 +389,79 @@ function nextRunner(
  *
  * A round is NOT a lap. Laps are per-car and recorded via completeLap.
  */
-export async function advanceTurn(raceId: string, who: Actor) {
-  await runTransaction(db, async (tx) => {
+export async function advanceTurn(
+  raceId: string,
+  who: Actor,
+  expect?: string,
+): Promise<boolean> {
+  return runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
     await refuseIfOver(tx, raceId, live);
-    if (live.roundOrder.length === 0) throw new Error("Round order is empty");
 
-    const retired = new Set(live.retired ?? []);
-    const index = live.currentPlayerId
-      ? live.roundOrder.indexOf(live.currentPlayerId)
-      : -1;
+    // Compare-and-set. Three phones and a tablet all show Next turn, and it is
+    // the biggest target on every one of them — two people tapping within the
+    // same second is not an edge case, it is what happens when a turn ends and
+    // nobody is sure whose job it is. A transaction makes both taps atomic but
+    // not idempotent: the second one re-reads, finds the turn already moved on,
+    // and moves it on again, so a car is silently skipped.
+    //
+    // The token names the turn the caller was looking at when they tapped, so
+    // the second tap is a no-op rather than a second advance. It is NOT a
+    // version of the live doc — a standings nudge or a lap arriving between the
+    // tap and the commit must not cancel a legitimate Next turn, and under
+    // turnKey it does not.
+    //
+    // Silent rather than thrown: "somebody else already did it" is the
+    // requested outcome, not a failure, and an error the operator has to
+    // dismiss for a turn that did advance is worse than nothing.
+    if (expect !== undefined && turnKey(live) !== expect) return false;
 
-    const withinRound = nextRunner(live.roundOrder, retired, index + 1, 1);
-    const roundOver = withinRound === -1;
+    const next = projectAdvance(live);
 
-    const nextRound = roundOver ? live.currentRound + 1 : live.currentRound;
-    const nextOrder = roundOver ? live.positionOrder : live.roundOrder;
-    const nextIndex = roundOver
-      ? nextRunner(nextOrder, retired, 0, 1)
-      : withinRound;
-
-    // Without this the loop would either spin or park the turn on nobody.
-    if (nextIndex === -1) throw new Error("Every car has retired");
-
-    // Every car has moved and the table wants to look at the order before the
-    // clock starts again. Stop on nobody's turn: the snapshot and the round
-    // increment still happen here, only the selection waits for startRound.
-    if (roundOver && live.betweenRounds) {
+    if (next.phase === "betweenRounds") {
       tx.update(liveDoc(raceId), {
         phase: "betweenRounds",
         currentPlayerId: null,
         turnStartedAt: null,
         turnDurationMs: live.turnDurationDefaultMs ?? live.turnDurationMs,
-        currentRound: nextRound,
-        roundOrder: nextOrder,
-        previousRoundOrder: live.roundOrder,
+        currentRound: next.currentRound,
+        roundOrder: next.roundOrder,
+        previousRoundOrder: next.previousRoundOrder,
         updatedAt: serverTimestamp(),
       });
       appendEvent(tx, raceId, who, {
         type: "roundEnded",
         round: live.currentRound,
       });
-      return;
+      return true;
     }
 
     tx.update(liveDoc(raceId), {
-      currentPlayerId: nextOrder[nextIndex],
+      currentPlayerId: next.currentPlayerId,
       turnStartedAt: serverTimestamp(),
-      currentRound: nextRound,
-      roundOrder: nextOrder,
-      // Rollover destroys the outgoing order; keep one round of it so a
-      // mis-tap on a round's first car is still recoverable.
-      ...(roundOver ? { previousRoundOrder: live.roundOrder } : {}),
+      currentRound: next.currentRound,
+      roundOrder: next.roundOrder,
+      ...(next.previousRoundOrder
+        ? { previousRoundOrder: next.previousRoundOrder }
+        : {}),
       updatedAt: serverTimestamp(),
     });
 
-    if (roundOver) {
+    if (next.roundOver) {
       appendEvent(tx, raceId, who, {
         type: "roundStarted",
-        round: nextRound,
-        order: nextOrder,
+        round: next.currentRound,
+        order: next.roundOrder,
       });
     }
 
     appendEvent(tx, raceId, who, {
       type: "turnAdvanced",
       fromPlayerId: live.currentPlayerId,
-      toPlayerId: nextOrder[nextIndex],
-      round: nextRound,
+      toPlayerId: next.currentPlayerId,
+      round: next.currentRound,
     });
+    return true;
   });
 }
 
@@ -475,19 +473,27 @@ export async function advanceTurn(raceId: string, who: Actor) {
  * ending — which, with the interstitial on, are minutes apart. With it off,
  * advanceTurn still emits it inline and the two moments are the same instant.
  */
-export async function startRound(raceId: string, who: Actor) {
-  await runTransaction(db, async (tx) => {
+export async function startRound(
+  raceId: string,
+  who: Actor,
+  expect?: string,
+): Promise<boolean> {
+  return runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
     await refuseIfOver(tx, raceId, live);
+
+    // Same compare-and-set as advanceTurn, and checked before the phase so a
+    // second tap on Start round is the no-op it obviously means rather than
+    // "Not between rounds" thrown at somebody who did nothing wrong. The
+    // thrown error stays for a caller that passes no token.
+    if (expect !== undefined && turnKey(live) !== expect) return false;
     if (live.phase !== "betweenRounds") throw new Error("Not between rounds");
 
-    const retired = new Set(live.retired ?? []);
-    const first = nextRunner(live.roundOrder, retired, 0, 1);
-    if (first === -1) throw new Error("Every car has retired");
+    const next = projectStartRound(live);
 
     tx.update(liveDoc(raceId), {
       phase: "turn",
-      currentPlayerId: live.roundOrder[first],
+      currentPlayerId: next.currentPlayerId,
       turnStartedAt: serverTimestamp(),
       turnDurationMs: live.turnDurationDefaultMs ?? live.turnDurationMs,
       updatedAt: serverTimestamp(),
@@ -495,9 +501,10 @@ export async function startRound(raceId: string, who: Actor) {
 
     appendEvent(tx, raceId, who, {
       type: "roundStarted",
-      round: live.currentRound,
-      order: live.roundOrder,
+      round: next.currentRound,
+      order: next.roundOrder,
     });
+    return true;
   });
 }
 
@@ -631,9 +638,28 @@ export async function setPositionOrder(
   who: Actor,
 ) {
   await runTransaction(db, async (tx) => {
-    await readLive(tx, raceId);
+    const live = await readLive(tx, raceId);
+
+    // **In the interstitial, the two lists are one list.**
+    //
+    // The whole point of the split is that a mid-round overtake affects the
+    // NEXT round rather than reshuffling a round already in progress — so
+    // roundOrder is frozen and positionOrder is what gets nudged. Between
+    // rounds there is no round in progress: advanceTurn has already
+    // snapshotted roundOrder from positionOrder, the screen is showing it, and
+    // the interstitial's own words are "check the order, then start the
+    // round". Writing only positionOrder there meant the drag changed nothing
+    // anyone could see and nothing startRound would read — the round then ran
+    // in the order the table had just finished correcting.
+    //
+    // Note this is not a second source of truth appearing: roundOrder stays the
+    // snapshot the round runs in, and it stays the thing the screen renders.
+    // It is only that between rounds the snapshot is still being taken.
+    const duringInterstitial = live.phase === "betweenRounds";
+
     tx.update(liveDoc(raceId), {
       positionOrder: order,
+      ...(duringInterstitial ? { roundOrder: order } : {}),
       updatedAt: serverTimestamp(),
     });
     appendEvent(tx, raceId, who, { type: "positionOrderChanged", order });

@@ -41,6 +41,19 @@ once: the round ends and the next `roundOrder` is snapshotted from
 a mid-round overtake affect the *next* round instead of reshuffling a round
 already in progress.
 
+**Between rounds, the two lists are one list.** The split exists so that a
+mid-round overtake affects the *next* round instead of reshuffling a round
+already in progress — but in the interstitial there is no round in progress,
+`advanceTurn` has already snapshotted `roundOrder` from `positionOrder`, and
+the screen is asking the table to check that snapshot. So `setPositionOrder`
+writes **both** while `phase === "betweenRounds"`. Writing only `positionOrder`
+there — which is what it used to do — meant a drag on the tablet changed
+nothing the big screen showed and nothing `startRound` would read, and the
+round then ran in the order the table had just finished correcting. This is not
+a second source of truth appearing: `roundOrder` is still the snapshot the
+round runs in and still the thing the screen renders; it is only that between
+rounds the snapshot is still being taken.
+
 `rewindTurn` walks the same list backwards, for a mis-tapped turn. It leaves
 the race **paused with a full clock**: `turnStartedAt: null` (which `readTimer`
 already reads as paused — no pause flag was added) and `turnDurationMs` reset
@@ -138,6 +151,38 @@ request-scoped and cannot hold a WebSocket anyway.
   Enforcing a penalty would require a single authority on expiry; don't add one
   without asking.
 
+**Next turn renders before the write lands, and it is a compare-and-set.** Two
+problems, one wound. Because a transaction has no local echo, the tapping
+device showed nothing for a round trip — long enough on house wifi to read as a
+missed tap — so somebody taps again; and a second advance from a doc that has
+already moved is a perfectly *legal* advance, so a car silently loses its turn.
+Two people tapping at once does the same thing, and with the button being the
+biggest target on every screen in the room that is not an edge case.
+
+- `lib/turn.ts` holds `projectAdvance` / `projectStartRound` as **pure
+  functions of the live doc**, in the shape of `lib/scoring.ts`. Two things now
+  have to agree on where the turn goes: the transaction that writes it and the
+  view that renders it early. One function, two callers — otherwise they drift
+  on the first retired car or round boundary.
+- `advanceTurn` and `startRound` take an optional `turnKey` token and **no-op,
+  returning `false`, if the live doc no longer matches it**. Silent, not
+  thrown: "somebody else already did it" is the requested outcome, and an error
+  to dismiss for a turn that did advance is worse than nothing. Passing no
+  token still advances unconditionally — the chatbot and the scripts have no
+  view to be stale.
+- `turnKey` is deliberately **not a version of the live doc**. A standings
+  nudge or a lap arriving between the tap and the commit must not cancel a
+  legitimate Next turn; only an actual change of turn does.
+- The player view holds the projected turn and releases it by the same rule
+  `CarStatusCard` uses — ours landed, or someone else moved the turn out from
+  under us. Releasing on the write's promise instead would flicker, because a
+  transaction resolves *before* the snapshot carrying it arrives. The primary
+  button is disabled while a change is held, and **keeps its colour**: dimming
+  it is most of what made the old round trip feel dead.
+- The held clock is anchored from the local `Date.now()` while the transaction
+  anchors from the server. That is the same cosmetic skew as below, for one
+  round trip.
+
 Clock skew between clients is unaddressed on purpose. It's cosmetic for an
 ambient timer. If it ever matters, fetch server time from a route handler once on
 load and store the offset.
@@ -149,7 +194,16 @@ not polling. One listener per screen, one document read per change. A weekly
 7-player game sits inside the free tier; polling would not.
 
 Firestore persistent local cache is enabled in `lib/firebase.ts`, so the
-countdown survives a wifi drop and the next-turn write queues until reconnect.
+countdown survives a wifi drop and the last live doc stays readable.
+
+**It does not queue the next turn, and this file used to say it did.** The
+cache latency-compensates plain writes; every mutation here is a *transaction*,
+and transactions have no local echo and no offline queue — they need the server
+before anything changes, and they fail rather than wait. The consequence is the
+one that matters at the table: the device that taps Next turn is the **last**
+screen in the room to see it happen. The big screen, a passive listener, gets
+the push and moves; the tablet that was tapped sits on the old turn for the
+whole round trip. See the optimistic turn under "The timer is state".
 
 ## Scoring and standings
 
@@ -668,6 +722,11 @@ it lists every race, which is what `/` wants.
   stops the clock — and anything placed beside a target that big eventually
   gets caught by a thumb. Small-and-adjacent was tried first and was the wrong
   trade. Keep it visually quiet and physically far from the primary button.
+- **A refused action says so at the top of the player view, not the bottom.**
+  `actionError` used to render under the standings and the pause button — off
+  the bottom of a phone, on the one screen where the question being asked is
+  "did my tap do anything?". A refused turn was indistinguishable from a tap
+  that missed, which is the worst available answer to that question.
 - **Nobody's turn means two different things** — the race is over, or it is
   between rounds. Every view discriminates on `race.status === "complete"`,
   never on the null `currentPlayerId`. `finishRace` nulls it too.
@@ -793,6 +852,19 @@ it lists every race, which is what `/` wants.
   the phones and tablet this is for. The mechanics live in
   `app/useDragOrder.ts` and are shared by `app/ReorderableList.tsx` and the
   track view; the ↑/↓ buttons stay as a fallback.
+- **The big screen animates a change of order; it does not just redraw one.**
+  `app/useFlipOrder.ts` is FLIP — React re-renders into the new order as
+  usual, each row is measured before and after, and the difference is played
+  back with `element.animate`, so the DOM the next render sees is untouched.
+  It earns its place between rounds: from six feet away a list that has *just
+  changed* and a list that was always like that are the same picture, and
+  which one it is is exactly what the table is arguing about. Measurement is
+  two passes on purpose — `getBoundingClientRect` includes transforms, so
+  recording a row's new home in the pass that starts its animation records
+  wherever the animation just put it, and every later change is then measured
+  against a lie. A row with no previous place is not animated: a car that has
+  just joined would slide in from the origin, which reads as an overtake.
+  `prefers-reduced-motion` skips it.
 - **The list does not reorder while you drag it.** An earlier version spliced a
   preview array on every pointermove, so rows jumped between slots and the thing
   under your finger was whatever had landed there. Now the DOM order stands
@@ -835,7 +907,7 @@ it lists every race, which is what `/` wants.
 ## Verification
 
 ```bash
-npm run smoke         # 254 end-to-end checks against the real project
+npm run smoke         # 262 end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 
@@ -915,6 +987,10 @@ nudging, per-car laps, manual correction.
     race settings (this race) or the season roster (the claim that follows a
     player between game nights). An escape hatch, not the fix — the fix is
     accounts, below.
+  - **Done:** the turn made reliable under real hands — Next turn renders
+    before the write lands, a duplicate or simultaneous tap is a no-op instead
+    of skipping a car, a nudge between rounds actually changes the round, and
+    the big screen animates the swap.
   - **Next:** post-game review to confirm the finishing order before a race is
     sealed.
   - **Then:** Firebase Auth graduates from anonymous to real accounts, and the

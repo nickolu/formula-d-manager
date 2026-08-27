@@ -81,6 +81,7 @@ import {
   teamDoc,
 } from "../lib/teams";
 import { readTimer } from "../lib/timer";
+import { turnKey } from "../lib/turn";
 import type {
   LiveState,
   Participant,
@@ -389,6 +390,23 @@ async function main() {
   mark0 = states.length;
   await advanceTurn(raceId, { source: "manual" });
   await waitFor(states, (s) => s.phase === "betweenRounds", "the interstitial again", 10_000, mark0);
+
+  // The interstitial's whole job is "check the order, then start the round",
+  // and a nudge there used to write positionOrder only — so the drag changed
+  // nothing the big screen showed and nothing startRound would read, and the
+  // round then ran in the order the table had just finished correcting.
+  mark0 = states.length;
+  await setPositionOrder(raceId, ["charlie", "alpha", "bravo"], { source: "manual" });
+  const nudged = await waitFor(states, (s) => s.positionOrder[0] === "charlie", "the nudge", 10_000, mark0);
+  check(
+    "a nudge between rounds moves the round order too",
+    nudged.roundOrder.join(",") === "charlie,alpha,bravo",
+    nudged.roundOrder.join(","),
+  );
+  mark0 = states.length;
+  await setPositionOrder(raceId, ["alpha", "bravo", "charlie"], { source: "manual" });
+  await waitFor(states, (s) => s.roundOrder[0] === "alpha", "nudged back", 10_000, mark0);
+
   mark0 = states.length;
   await startRound(raceId, { source: "manual" });
   const rolled = await waitFor(states, (s) => s.phase === "turn", "round 2 running", 10_000, mark0);
@@ -419,6 +437,38 @@ async function main() {
   const s1 = await waitFor(states, (s) => s.currentPlayerId === "bravo", "bravo");
   check("advance follows round order", true);
   check("round unchanged mid-round", s1.currentRound === 1, `round ${s1.currentRound}`);
+
+  console.log("\ntwo phones tapping Next turn at once:");
+  // Next turn is the biggest target on every screen in the room, and when a
+  // turn ends nobody is sure whose job it is to tap it. A transaction makes
+  // both taps atomic but not idempotent: the second re-reads, finds the turn
+  // already moved, and moves it again — so a car silently loses its turn.
+  // The token names the turn the caller was looking at.
+  const bravosTurn = turnKey(s1);
+  mark0 = states.length;
+  const [first, second] = await Promise.all([
+    advanceTurn(raceId, { source: "manual" }, bravosTurn),
+    advanceTurn(raceId, { source: "manual" }, bravosTurn),
+  ]);
+  check("exactly one of two simultaneous taps advances", first !== second, `${first}/${second}`);
+  const once = await waitFor(states, (s) => s.currentPlayerId === "charlie", "charlie, once", 10_000, mark0);
+  check("...and the turn moves exactly one place", once.currentRound === 1, `round ${once.currentRound}`);
+  check(
+    "a tap naming a turn that has already passed does nothing",
+    (await advanceTurn(raceId, { source: "manual" }, bravosTurn)) === false,
+  );
+  const stillCharlie = (await getDoc(liveDoc(raceId))).data() as LiveState;
+  check("...and leaves the turn where it was", stillCharlie.currentPlayerId === "charlie", `${stillCharlie.currentPlayerId}`);
+  check(
+    "an untokened tap still advances, for callers that have no view to be stale",
+    (await advanceTurn(raceId, { source: "manual" })) === true,
+  );
+
+  // Back to bravo, which is where the assertions below were written to start.
+  mark0 = states.length;
+  await rewindTurn(raceId, { source: "manual" });
+  await rewindTurn(raceId, { source: "manual" });
+  await waitFor(states, (s) => s.currentPlayerId === "bravo" && s.currentRound === 1, "bravo again", 10_000, mark0);
 
   console.log("\nmid-round overtake — charlie passes to the lead:");
   await setPositionOrder(raceId, ["charlie", "alpha", "bravo"], { source: "manual" });
@@ -483,16 +533,19 @@ async function main() {
   const events = await getDocs(collection(db, "races", raceId, "events"));
   const types = events.docs.map((d) => d.data().type as string);
   check("race creation seeded the log", types.includes("raceCreated"));
-  // Two rounds have begun by now: one from startRound leaving the interstitial,
-  // one from the inline rollover after the toggle was turned off.
-  check("roundStarted logged per round begun", types.filter((t) => t === "roundStarted").length === 2, `${types.filter((t) => t === "roundStarted").length}`);
+  // Three rounds have begun by now: one from startRound leaving the
+  // interstitial, and two from inline rollovers after the toggle was turned
+  // off — the second of those is the untokened advance in the two-phones test.
+  check("roundStarted logged per round begun", types.filter((t) => t === "roundStarted").length === 3, `${types.filter((t) => t === "roundStarted").length}`);
   // Two rounds ended into the interstitial; the inline rollover ends none.
   check("roundEnded logged only for the interstitial", types.filter((t) => t === "roundEnded").length === 2, `${types.filter((t) => t === "roundEnded").length}`);
   check("overtake logged", types.includes("positionOrderChanged"));
   check("lapCompleted logged 3x", types.filter((t) => t === "lapCompleted").length === 3);
-  // Five advances have landed on a car; the two that ended a round into the
-  // interstitial landed on nobody and logged roundEnded instead.
-  check("turnAdvanced logged per car that got the turn", types.filter((t) => t === "turnAdvanced").length === 5, `${types.filter((t) => t === "turnAdvanced").length}`);
+  // Seven advances have landed on a car; the two that ended a round into the
+  // interstitial landed on nobody and logged roundEnded instead. The two extra
+  // are from the two-phones test — and it is exactly two, not three, which is
+  // the point of it: the duplicate tap wrote nothing to log.
+  check("turnAdvanced logged per car that got the turn", types.filter((t) => t === "turnAdvanced").length === 7, `${types.filter((t) => t === "turnAdvanced").length}`);
   check("all events carry a source", events.docs.every((d) => !!d.data().source));
   check("the flag drop is logged", types.includes("raceStarted"));
   check("the end of a round is logged", types.includes("roundEnded"));
@@ -870,7 +923,7 @@ async function main() {
   );
   check(
     "every rewind is logged",
-    finalTypes.filter((t) => t === "turnRewound").length === 9,
+    finalTypes.filter((t) => t === "turnRewound").length === 11,
     `${finalTypes.filter((t) => t === "turnRewound").length}`,
   );
   // Three from the retirement section, two more from the note test proving a
