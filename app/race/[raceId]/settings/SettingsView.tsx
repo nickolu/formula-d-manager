@@ -11,6 +11,7 @@ import {
 import {
   clearRacerClaim,
   deleteRace,
+  reopenRace,
   removePlayer,
   setPositionOrder,
   updateRaceSettings,
@@ -356,6 +357,42 @@ export default function SettingsView({ raceId }: { raceId: string }) {
               ))}
             </ul>
           )}
+        </section>
+      )}
+
+      {/* The undo for a race that ended itself.
+          A race seals the moment its last car is home or out, with nobody
+          asked to confirm it — which is the right trade only because getting
+          it back is one tap on this screen. The realistic mistake is a
+          mis-tapped final lap on the last car still running; that ends the
+          race, and no amendment can fix it, because the race is not over.
+          An amendment is for an order that was merely wrong. */}
+      {race.status === "complete" && (
+        <section>
+          <h2 className="mb-2 text-xs uppercase tracking-widest text-neutral-500">
+            Finished
+          </h2>
+          <div className="flex flex-col gap-3 rounded-2xl border border-neutral-800 p-4">
+            <p className="text-sm text-neutral-400">
+              This race ended when its last car finished or retired. Reopening
+              hands it back to the table on nobody&rsquo;s turn, with the laps
+              and retirements exactly as they are.
+            </p>
+            <p className="text-xs text-neutral-500">
+              The result comes off the season table until it is finished again.
+              If the finishing order is simply wrong, amend it on the results
+              screen instead.
+            </p>
+            <button
+              onClick={() =>
+                run("Reopened", () => reopenRace(raceId, { source: "manual" }))
+              }
+              disabled={busy}
+              className="rounded-xl border border-neutral-700 py-3 disabled:opacity-50"
+            >
+              Reopen this race
+            </button>
+          </div>
         </section>
       )}
 

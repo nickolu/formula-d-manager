@@ -191,6 +191,8 @@ export async function createRace(input: NewRaceInput): Promise<string> {
     positionOrder: ids,
     roundOrder: ids,
     retired: [],
+    // Ordered by the order cars cross the line, so it is the finishing order.
+    finished: [],
     previousRoundOrder: null,
     updatedAt: serverTimestamp(),
   });
@@ -328,6 +330,8 @@ export async function backfillRace(input: BackfillRaceInput): Promise<string> {
     positionOrder: order,
     roundOrder: order,
     retired: dnf,
+    // Nobody crossed the line in front of this app: it never timed this race.
+    finished: [],
     previousRoundOrder: null,
     updatedAt: serverTimestamp(),
   });

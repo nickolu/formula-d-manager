@@ -31,6 +31,7 @@ fields exist.
 | 17 | 17 | Teams, admin side | **done** | 13, 14 |
 | 18 | 18 | Teams, player side | **done** | 17 |
 | 19 | 19 | Standings: drivers and constructors | **done** | 14, 17 |
+| 20 | 20 | Crossing the line | **done** | 6, 7, 8 |
 
 **Every item is done.** What changed after an item shipped is under "Amended
 after shipping"; what is left is under "Still open".
@@ -105,6 +106,15 @@ time. Do not re-argue them from a spec file.
 - **A race records `location` and a settable `scheduledAt`.** Free text, because
   the venue is as often "the pub" as "Nick's". Empty clears it, like a
   participant note.
+- **A race seals itself, with no confirmation** (amends item 20's own spec,
+  mid-build, on the user's call: *"we don't need them to confirm race finish.
+  Admin can undo it from the admin views."*). The spec had the race park on
+  nobody's turn behind a new `raceOver` phase and wait for a tap. Cutting it
+  deleted the phase, the confirmation screen and a third meaning for "nobody's
+  turn" — and added `reopenRace`, since without a confirmation before the seal
+  there has to be a real way back after it. The trade: one tap on the
+  commissioner's screen when it goes wrong, instead of one tap every game night
+  in case it does.
 - **`Race.backfilled` has no reader.** The flag stays — it records that the app
   never timed a race, unrecoverable otherwise — but no view surfaces it: at the
   table nobody is telling those two kinds of race apart.
@@ -120,8 +130,11 @@ when it gets picked up.
   items 13–19 is reasoning rather than observation. The tab bars, the slot grid
   and the two standings tables are the places to look first. This is the single
   largest untested assumption in the arc.
-- **Post-game review** — confirm the finishing order before a race is sealed.
-  `AGENTS.md` lists it as the next thing after this arc.
+- **Post-game review** — a *review* of the finishing order, not a gate on
+  sealing. Item 20 specced a confirmation step and the user cut it before it
+  was built: a race seals itself and `reopenRace` is the undo. If this comes
+  back it is as a screen someone chooses to open, never a tap standing between
+  the last car and the end of the race.
 - **A history view for the season event log.** Deferred in item 13 on purpose:
   append now, view when someone wants to read it. The data is being written.
 

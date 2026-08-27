@@ -45,6 +45,9 @@ export default function ResultsView({ raceId }: { raceId: string }) {
   // Retirement is live state now, not a local checkbox: the player view and
   // this one read the same list and cannot disagree about who is out.
   const retired = new Set(live?.retired ?? []);
+  // Cars that crossed the line. Not a retirement and never labelled as one —
+  // this is the screen where that distinction becomes a season's points.
+  const home = new Set(live?.finished ?? []);
 
   const nameOf = (id: string) => players.get(id)?.displayName ?? id;
 
@@ -98,14 +101,18 @@ export default function ResultsView({ raceId }: { raceId: string }) {
         renderRow={(id, i) => {
           const laps = participants.get(id)?.lapsCompleted ?? 0;
           const isOut = retired.has(id);
+          const isHome = home.has(id);
 
           return (
             <div className="flex flex-col gap-2 rounded border border-neutral-800 p-3">
               <div className="flex items-center gap-2">
                 <span className="w-5 text-neutral-500">{i + 1}</span>
                 <span
-                  className={`flex-1 ${isOut ? "line-through opacity-50" : ""}`}
+                  className={`flex-1 ${
+                    isOut ? "line-through opacity-50" : isHome ? "text-emerald-400" : ""
+                  }`}
                 >
+                  {isHome && <span title="Finished">🏁 </span>}
                   {nameOf(id)}
                 </span>
 
