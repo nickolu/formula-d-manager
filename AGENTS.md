@@ -621,6 +621,21 @@ it lists every race, which is what `/` wants.
 - **Next 16:** `params` is a `Promise` and must be awaited. A client component
   page cannot be `async` — server page awaits params, passes the id to a
   `"use client"` child. Every route here follows that shape.
+- **The app is dark, always — not "dark by default".** Every screen is written
+  against a dark ground and there is no light palette. What existed was the
+  Next starter's `prefers-color-scheme` block flipping the *page* to white
+  while every component kept painting its dark colours on top, which on a phone
+  set to light made whole screens unreadable — form fields worst of all, since
+  a note box is `bg-neutral-900` and its text was the light theme's near-black.
+  The query is gone rather than answered with a second palette: a light theme
+  means making every colour choice in the app twice, and this is a tool for a
+  table in a dim room. **`color-scheme: dark` is the half a Tailwind class
+  cannot do** — it is what makes the *browser's own* widgets dark, the date
+  picker, number spinners, caret, autofill and scrollbars. It is declared
+  twice on purpose: in `globals.css`, and as `viewport.colorScheme` in
+  `app/layout.tsx` so the meta tag lands with the head and the first paint of a
+  form control is already right. Do not add `dark:` variants; there is nothing
+  for them to vary against.
 - Season scoring lives in `seasons.scoringConfig` in Firestore, **not in code**.
   House rules churn; changing them must not require a deploy.
 - Every event carries `source: "manual" | "chat" | "system"` so chat-entered
