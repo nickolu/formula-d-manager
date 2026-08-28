@@ -620,9 +620,40 @@ async function main() {
   await waitFor(states, (s) => s.turnDurationDefaultMs === TURN_MS, "duration restored", 10_000, mark);
 
   await rewindTurn(raceId, { source: "manual" }); // bravo -> alpha
+
+  // The first car of round 1 has no earlier turn behind it: the only thing
+  // before it is the flag drop, so the reverse gear steps back past that
+  // instead of refusing. A start dropped by mistake used to be the one turn
+  // nobody could take back.
+  mark = states.length;
+  await rewindTurn(raceId, { source: "manual" });
+  const ungridded = await waitFor(states, (s) => s.turnStartedAt === null && s.roundOrder.join(",") === "charlie,alpha,bravo", "back on the grid", 10_000, mark);
+  check(
+    "rewinding from the very first turn puts the race back to scheduled",
+    ((await getDoc(doc(db, "races", raceId))).data() as Race).status === "scheduled",
+  );
+  check("...with the clock stopped", readTimer(ungridded, Date.now()).isPaused);
+  check(
+    "...and the scheduled shape back: the grid's first car up, round 1",
+    ungridded.currentPlayerId === "charlie" && ungridded.currentRound === 1,
+    `${ungridded.currentPlayerId} round ${ungridded.currentRound}`,
+  );
+  check("...and no round history left over", ungridded.previousRoundOrder === null);
   await rejects(
     () => rewindTurn(raceId, { source: "manual" }),
-    "rewinding past the start of the race is refused",
+    "...and an unstarted race has nothing to rewind",
+  );
+
+  // The grid being editable again is the whole point of going back to it.
+  mark = states.length;
+  await setPositionOrder(raceId, ["alpha", "bravo", "charlie"], { source: "manual" });
+  await waitFor(states, (s) => s.positionOrder[0] === "alpha", "the grid put back", 10_000, mark);
+  await startRace(raceId, { source: "manual" });
+  const restarted = await waitFor(states, (s) => s.turnStartedAt !== null, "the flag drops again", 10_000, mark);
+  check(
+    "the flag can be dropped again on the edited grid",
+    restarted.currentPlayerId === "alpha" && restarted.roundOrder.join(",") === "alpha,bravo,charlie",
+    restarted.roundOrder.join(","),
   );
 
   // State here: round 1, roundOrder alpha,bravo,charlie, alpha to play.
@@ -925,6 +956,13 @@ async function main() {
     "every rewind is logged",
     finalTypes.filter((t) => t === "turnRewound").length === 11,
     `${finalTypes.filter((t) => t === "turnRewound").length}`,
+  );
+  // The rewind off the first turn is not one of those: no turn moved, the
+  // race's status did, and a replay has to be able to see that.
+  check(
+    "un-starting logs its own event, not a rewind",
+    finalTypes.filter((t) => t === "raceUnstarted").length === 1,
+    `${finalTypes.filter((t) => t === "raceUnstarted").length}`,
   );
   // Three from the retirement section, two more from the note test proving a
   // note survives the flag going off and back on.

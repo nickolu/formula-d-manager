@@ -170,6 +170,8 @@ function describe(event: RaceEvent, nameOf: (id: PlayerId) => string): string {
       } — ${event.lapCount} laps, grid: ${list(event.order)}.`;
     case "raceStarted":
       return `The flag drops — grid: ${list(event.order)}.`;
+    case "raceUnstarted":
+      return `Back to the grid — the start was undone. Grid: ${list(event.order)}.`;
     case "raceSettingsChanged":
       return `Settings changed: ${describePatch(event.patch)}.`;
     case "playerRemoved":
