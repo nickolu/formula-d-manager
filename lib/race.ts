@@ -1,6 +1,7 @@
 import {
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -16,9 +17,13 @@ import {
 import { db } from "./firebase";
 import { carStatusSpecFor, gearsFor, playerId as slugFor, startOf } from "./setup";
 import {
+  deriveFinished,
+  isRaceOver,
   nextRunner,
+  outOfPlay,
   projectAdvance,
   projectStartRound,
+  proposedFinishingOrder,
   turnKey,
 } from "./turn";
 import type {
@@ -36,6 +41,8 @@ export const liveDoc = (raceId: string) => doc(db, "races", raceId, "state", "li
 export const eventsCol = (raceId: string) => collection(db, "races", raceId, "events");
 export const participantDoc = (raceId: string, playerId: PlayerId) =>
   doc(db, "races", raceId, "participants", playerId);
+export const participantsCol = (raceId: string) =>
+  collection(db, "races", raceId, "participants");
 
 /**
  * Every mutation appends to the event log in the same transaction that touches
@@ -87,6 +94,81 @@ async function refuseIfOver(tx: Transaction, raceId: string, live: LiveState) {
   if (live.currentPlayerId) return;
   const race = await readRace(tx, raceId);
   if (race.status === "complete") throw new Error("This race is over");
+}
+
+/**
+ * Writes the seal: the race document, the live doc, every participant's final
+ * position, and the `raceFinished` event, in whatever transaction is open.
+ *
+ * Factored out because a race now ends two ways and both must produce
+ * *identical* state — `finishRace`, where a commissioner hands in an order, and
+ * the automatic seal below, where the last car home ends it. A second copy of
+ * these writes would drift on the first field either one gains.
+ */
+function seal(
+  tx: Transaction,
+  raceId: string,
+  order: PlayerId[],
+  retirements: PlayerId[],
+  who: Actor,
+) {
+  tx.update(raceDoc(raceId), {
+    status: "complete",
+    result: { order, dnf: retirements },
+  });
+  tx.update(liveDoc(raceId), {
+    currentPlayerId: null,
+    turnStartedAt: null,
+    positionOrder: order,
+    updatedAt: serverTimestamp(),
+  });
+
+  order.forEach((playerId, i) => {
+    tx.update(participantDoc(raceId, playerId), {
+      finalPosition: i + 1,
+      dnf: retirements.includes(playerId),
+    });
+  });
+
+  appendEvent(tx, raceId, who, {
+    type: "raceFinished",
+    order,
+    dnf: retirements,
+  });
+}
+
+/**
+ * Seals the race if the mutation in progress has just accounted for the last
+ * car — every one of them finished or retired.
+ *
+ * **A race that is over ends itself, and nobody is asked to confirm it.** The
+ * alternative considered was parking on nobody's turn and offering the order
+ * for approval; it was rejected because it puts a tap on every game night to
+ * guard against a mis-tap, and a mis-tap is already recoverable — `reopenRace`
+ * hands the race back, and `amendRaceResult` fixes an order that was merely
+ * wrong. Both live on the commissioner's screens, where undoing belongs.
+ *
+ * This is not the rule that `setDnf` "deliberately does not move the turn on"
+ * being reversed. That rule is about moving the turn to *another car*, and
+ * fighting the person holding the tablet. There is no other car here.
+ *
+ * The order it seals with is `proposedFinishingOrder` — every part of which is
+ * something the table entered: who crossed the line and when, and who went out
+ * when. Nothing invents a placing.
+ *
+ * Returns whether it sealed, so a caller that has more to do can tell.
+ */
+function sealIfDone(
+  tx: Transaction,
+  raceId: string,
+  race: Race,
+  next: LiveState,
+  who: Actor,
+): boolean {
+  if (race.status !== "live") return false;
+  if (!isRaceOver(next)) return false;
+  seal(tx, raceId, proposedFinishingOrder(next), [...(next.retired ?? [])], who);
+  return true;
 }
 
 /**
@@ -164,8 +246,30 @@ export async function updateRaceSettings(
   patch: RaceSettingsPatch,
   who: Actor,
 ) {
+  // Changing the race length moves the line every car is measured against, so
+  // `live.finished` — the cache of `lapsCompleted >= lapCount` — has to be
+  // re-derived, and that needs every participant's lap count. **The web SDK
+  // cannot query a collection inside a transaction**, the same wall claimRacer
+  // and amendRaceResult hit, so the read happens first. The bargain that buys:
+  // a lap tapped between this read and the commit is not seen, leaving the
+  // cache one lap stale until the next lap is recorded. This is a commissioner
+  // retyping the race length between rounds, not something on the turn path.
+  const laps =
+    patch.lapCount === undefined
+      ? null
+      : new Map(
+          (await getDocs(participantsCol(raceId))).docs.map((d) => [
+            d.id,
+            (d.data() as Participant).lapsCompleted ?? 0,
+          ]),
+        );
+
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
+    // Only when the race length moves, and up here because a transaction
+    // cannot read after it writes: lowering it can finish every remaining car,
+    // and the seal has to know whether the race is still live.
+    const race = laps ? await readRace(tx, raceId) : null;
 
     // Firestore rejects undefined, and an event carrying keys that did not
     // change would make the log lie about what happened.
@@ -173,6 +277,8 @@ export async function updateRaceSettings(
     // the log stores a Timestamp, so they are not the same shape.
     const applied: RaceSettingsChangedEvent["patch"] = {};
     const raceFields: Record<string, unknown> = {};
+    /** Set when the race length moved, so the seal below can be reconsidered. */
+    let pending: LiveState | null = null;
 
     if (patch.track !== undefined) {
       const track = patch.track.trim();
@@ -232,6 +338,20 @@ export async function updateRaceSettings(
     if (patch.settings?.betweenRounds !== undefined) {
       liveFields.betweenRounds = patch.settings.betweenRounds;
     }
+    // Raising the race length puts a car that had finished back in the race —
+    // which is the correct answer to "we set the race length wrong", and the
+    // reason finishing is derived rather than a flag somebody sets. Lowering it
+    // finishes everyone already past the new line.
+    if (laps && patch.lapCount !== undefined) {
+      const finished = deriveFinished(
+        live.finished ?? [],
+        live.positionOrder,
+        (id) => laps.get(id) ?? 0,
+        patch.lapCount,
+      );
+      liveFields.finished = finished;
+      pending = { ...live, finished };
+    }
     if (Object.keys(liveFields).length > 0) {
       tx.update(liveDoc(raceId), { ...liveFields, updatedAt: serverTimestamp() });
     }
@@ -252,6 +372,12 @@ export async function updateRaceSettings(
     if (Object.keys(applied).length === 0) return;
 
     appendEvent(tx, raceId, who, { type: "raceSettingsChanged", patch: applied });
+
+    // Shortening a race can put every remaining car past the line at once.
+    // Lengthening one takes cars back out of `finished`, which is the whole
+    // point of deriving it — but it cannot un-seal a race, and does not try to:
+    // reopening is an explicit act on the commissioner's screen.
+    if (race && pending) sealIfDone(tx, raceId, race, pending, who);
   });
 }
 
@@ -418,6 +544,15 @@ export async function advanceTurn(
 
     const next = projectAdvance(live);
 
+    // Nowhere for the turn to go: every car has finished or retired. Normally
+    // the lap or the retirement that accounted for the last car has already
+    // sealed the race, so this is the backstop — a race from before finishing
+    // was modelled, where the only way out is retiring everyone.
+    if (!next) {
+      sealIfDone(tx, raceId, await readRace(tx, raceId), live, who);
+      return true;
+    }
+
     if (next.phase === "betweenRounds") {
       tx.update(liveDoc(raceId), {
         phase: "betweenRounds",
@@ -491,6 +626,13 @@ export async function startRound(
 
     const next = projectStartRound(live);
 
+    // A lap tapped during the interstitial can finish the last car still
+    // running, which ends the race rather than starting a round nobody is in.
+    if (!next) {
+      sealIfDone(tx, raceId, await readRace(tx, raceId), live, who);
+      return true;
+    }
+
     tx.update(liveDoc(raceId), {
       phase: "turn",
       currentPlayerId: next.currentPlayerId,
@@ -537,7 +679,7 @@ export async function rewindTurn(raceId: string, who: Actor) {
     const live = await readLive(tx, raceId);
     await refuseIfOver(tx, raceId, live);
 
-    const retired = new Set(live.retired ?? []);
+    const skip = outOfPlay(live);
     const index = live.currentPlayerId
       ? live.roundOrder.indexOf(live.currentPlayerId)
       : live.roundOrder.length;
@@ -549,7 +691,7 @@ export async function rewindTurn(raceId: string, who: Actor) {
     const withinRound =
       live.phase === "betweenRounds"
         ? -1
-        : nextRunner(live.roundOrder, retired, index - 1, -1);
+        : nextRunner(live.roundOrder, skip, index - 1, -1);
 
     if (withinRound !== -1) {
       const target = live.roundOrder[withinRound];
@@ -613,8 +755,8 @@ export async function rewindTurn(raceId: string, who: Actor) {
       throw new Error("Nothing to rewind to");
     }
 
-    const lastIndex = nextRunner(previous, retired, previous.length - 1, -1);
-    if (lastIndex === -1) throw new Error("Every car has retired");
+    const lastIndex = nextRunner(previous, skip, previous.length - 1, -1);
+    if (lastIndex === -1) throw new Error("Every car has finished or retired");
 
     tx.update(liveDoc(raceId), {
       phase: "turn",
@@ -654,6 +796,7 @@ export async function setDnf(
 ) {
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
+    const race = await readRace(tx, raceId);
     const snap = await tx.get(participantDoc(raceId, playerId));
     if (!snap.exists()) throw new Error(`${playerId} is not in this race`);
 
@@ -663,12 +806,18 @@ export async function setDnf(
     if (dnf) retired.add(playerId);
     else retired.delete(playerId);
 
+    const next = { ...live, retired: [...retired] };
     tx.update(participantDoc(raceId, playerId), { dnf });
     tx.update(liveDoc(raceId), {
-      retired: [...retired],
+      retired: next.retired,
       updatedAt: serverTimestamp(),
     });
     appendEvent(tx, raceId, who, { type: "dnfChanged", playerId, dnf });
+
+    // Retiring the last running car ends the race. It used to be a dead end:
+    // advanceTurn threw "Every car has retired" and nothing could move.
+    // Written after the live update above so the seal's own writes win.
+    sealIfDone(tx, raceId, race, next, who);
   });
 }
 
@@ -710,7 +859,23 @@ export async function setPositionOrder(
   });
 }
 
-/** One car crossed the line. Cars complete laps at different rounds. */
+/**
+ * One car crossed the line. Cars complete laps at different rounds.
+ *
+ * The lap that reaches the race's `lapCount` is the one that finishes the car:
+ * it stops taking turns, and it is **not** a retirement. That is a derivation
+ * — `lapsCompleted >= lapCount` — and `live.finished` is its cache, appended to
+ * in crossing order so the list *is* the finishing order.
+ *
+ * Only `lapCompleted` is appended. Nothing else happened at the table: the car
+ * completed a lap, and "the car that completes lap n of n has finished" is a
+ * rule of the system applied to that fact, the way a rewind's paused clock is.
+ * A replay derives it, and a `carFinished` event would be a second record of
+ * one thing.
+ *
+ * The race-doc read is the price of the derivation. This is not the hot path —
+ * advanceTurn is, and it still costs one read.
+ */
 export async function completeLap(
   raceId: string,
   playerId: PlayerId,
@@ -718,17 +883,33 @@ export async function completeLap(
 ) {
   await runTransaction(db, async (tx) => {
     const live = await readLive(tx, raceId);
+    const race = await readRace(tx, raceId);
     const snap = await tx.get(participantDoc(raceId, playerId));
     if (!snap.exists()) throw new Error(`${playerId} is not in this race`);
 
     const lap = ((snap.data() as Participant).lapsCompleted ?? 0) + 1;
+    const finished = [...(live.finished ?? [])];
+    const crossed = lap >= race.lapCount && !finished.includes(playerId);
+    if (crossed) finished.push(playerId);
+
     tx.update(participantDoc(raceId, playerId), { lapsCompleted: increment(1) });
+
+    // A lap that changes nothing about who is in the race leaves the live doc
+    // alone entirely, rather than spending a write on updatedAt.
+    if (crossed) {
+      tx.update(liveDoc(raceId), { finished, updatedAt: serverTimestamp() });
+    }
+
     appendEvent(tx, raceId, who, {
       type: "lapCompleted",
       playerId,
       lap,
       round: live.currentRound,
     });
+
+    // The last car home ends the race. Written after the live update above so
+    // the seal's own currentPlayerId/positionOrder win.
+    sealIfDone(tx, raceId, race, { ...live, finished }, who);
   });
 }
 
@@ -940,17 +1121,32 @@ export async function setParticipantNote(
   });
 }
 
-/** Undoes a mis-tapped lap, keeping the correction in the log. */
+/**
+ * Undoes a mis-tapped lap, keeping the correction in the log.
+ *
+ * This is also the undo for a mis-tapped *final* lap, which is why it has to
+ * put the car back in the race: dropping below `lapCount` un-finishes it, and
+ * if that was the car the race was waiting on, the race un-parks.
+ */
 export async function uncompleteLap(
   raceId: string,
   playerId: PlayerId,
   who: Actor,
 ) {
   await runTransaction(db, async (tx) => {
+    const live = await readLive(tx, raceId);
+    const race = await readRace(tx, raceId);
     const snap = await tx.get(participantDoc(raceId, playerId));
     if (!snap.exists()) throw new Error(`${playerId} is not in this race`);
     const current = (snap.data() as Participant).lapsCompleted ?? 0;
     if (current <= 0) return;
+
+    const finished = (live.finished ?? []).filter(
+      (id) => id !== playerId || current - 1 >= race.lapCount,
+    );
+    if (finished.length !== (live.finished ?? []).length) {
+      tx.update(liveDoc(raceId), { finished, updatedAt: serverTimestamp() });
+    }
 
     tx.update(participantDoc(raceId, playerId), { lapsCompleted: increment(-1) });
     appendEvent(tx, raceId, who, {
@@ -1061,28 +1257,63 @@ export async function finishRace(
       }
     }
 
+    seal(tx, raceId, order, retirements, who);
+  });
+}
+
+/**
+ * Hands a sealed race back to the table.
+ *
+ * This is the undo for a race that ended itself, and it is why nobody is asked
+ * to confirm the seal: a mis-tapped final lap is one tap to fix on the
+ * commissioner's screen, rather than a tap on every game night to prevent.
+ *
+ * It is **not** an amendment and it is not a correction of the log. The
+ * `raceFinished` event stays exactly where it is — history is not edited here,
+ * any more than anywhere else — and `raceReopened` is appended beside it as its
+ * own thing that happened. What is undone is the *cache*: `result` comes off
+ * the race document and `finalPosition` off the participants, which is the same
+ * licence `amendRaceResult` takes and for the same stated reason.
+ *
+ * The race comes back **paused with a full clock, on nobody's turn** — the
+ * interstitial, the state the app already has for "check the order, then start
+ * a round". Guessing whose turn it was when the race ended would be inventing
+ * something nobody recorded, and the table is looking straight at the board.
+ *
+ * `deleteField()` rather than a null `result`: absent is what a live race has,
+ * and `Race.result` is typed optional precisely so nothing reads it on one.
+ */
+export async function reopenRace(raceId: string, who: Actor) {
+  await runTransaction(db, async (tx) => {
+    const race = await readRace(tx, raceId);
+    const live = await readLive(tx, raceId);
+    if (race.status !== "complete") throw new Error("This race is not finished");
+
+    const previous = race.result ?? { order: live.positionOrder, dnf: [] };
+
     tx.update(raceDoc(raceId), {
-      status: "complete",
-      result: { order, dnf: retirements },
+      status: "live",
+      result: deleteField(),
     });
     tx.update(liveDoc(raceId), {
+      phase: "betweenRounds",
       currentPlayerId: null,
       turnStartedAt: null,
-      positionOrder: order,
+      turnDurationMs: live.turnDurationDefaultMs ?? live.turnDurationMs,
       updatedAt: serverTimestamp(),
     });
 
-    order.forEach((playerId, i) => {
-      tx.update(participantDoc(raceId, playerId), {
-        finalPosition: i + 1,
-        dnf: retirements.includes(playerId),
-      });
-    });
+    // The finishing positions were a cache of the seal; the laps and the
+    // retirements that produced them are untouched, so the race carries on
+    // knowing exactly what it knew.
+    for (const playerId of previous.order) {
+      tx.update(participantDoc(raceId, playerId), { finalPosition: null });
+    }
 
     appendEvent(tx, raceId, who, {
-      type: "raceFinished",
-      order,
-      dnf: retirements,
+      type: "raceReopened",
+      order: previous.order,
+      dnf: previous.dnf,
     });
   });
 }

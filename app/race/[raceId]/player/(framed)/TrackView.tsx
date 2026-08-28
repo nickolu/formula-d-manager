@@ -44,6 +44,9 @@ export default function TrackView({
 
   const cars = assignCars(live.positionOrder, players);
   const retired = new Set(live.retired ?? []);
+  // Crossed the line. Drawn with a flag rather than the retirement's cross —
+  // the car is parked either way, but for opposite reasons.
+  const home = new Set(live.finished ?? []);
   const turnIndex = live.currentPlayerId
     ? live.roundOrder.indexOf(live.currentPlayerId)
     : -1;
@@ -73,6 +76,7 @@ export default function TrackView({
         {order.map((id, i) => {
           const car = cars.get(id)!;
           const isOut = retired.has(id);
+          const isHome = home.has(id);
           const isCurrent = id === live.currentPlayerId;
           const roundIdx = live.roundOrder.indexOf(id);
           const alreadyMoved = roundIdx !== -1 && roundIdx < turnIndex;
@@ -112,6 +116,8 @@ export default function TrackView({
                   className={`relative flex h-14 w-14 shrink-0 cursor-grab select-none items-center justify-center rounded-xl text-xl font-bold shadow-lg transition active:cursor-grabbing disabled:opacity-30 ${
                     isCurrent ? "ring-4 ring-emerald-400" : ""
                   } ${isOut ? "opacity-40 grayscale" : ""} ${
+                    isHome ? "opacity-60" : ""
+                  } ${
                     alreadyMoved && !isCurrent && !isOut ? "opacity-70" : ""
                   }`}
                   style={{
@@ -134,6 +140,14 @@ export default function TrackView({
                       ✕
                     </span>
                   )}
+                  {isHome && !isOut && (
+                    <span
+                      aria-hidden
+                      className="absolute -right-1 -top-1 text-base"
+                    >
+                      🏁
+                    </span>
+                  )}
                 </button>
 
                 {/* Tapping the name opens the actions. Selection deliberately
@@ -149,11 +163,13 @@ export default function TrackView({
                     className={`truncate text-lg ${
                       isOut
                         ? "text-neutral-600 line-through"
-                        : isCurrent
-                          ? "font-semibold text-emerald-400"
-                          : alreadyMoved
-                            ? "text-neutral-500"
-                            : "text-white"
+                        : isHome
+                          ? "text-emerald-400"
+                          : isCurrent
+                            ? "font-semibold text-emerald-400"
+                            : alreadyMoved
+                              ? "text-neutral-500"
+                              : "text-white"
                     }`}
                   >
                     <span className="mr-2 text-neutral-600">P{i + 1}</span>
@@ -161,7 +177,8 @@ export default function TrackView({
                   </span>
                   <span className="text-xs text-neutral-500">
                     lap {laps}
-                    {isCurrent && " · driving now"}
+                    {isHome && " · finished"}
+                    {isCurrent && !isHome && " · driving now"}
                     {isOut && " · out"}
                   </span>
                 </button>
@@ -175,7 +192,9 @@ export default function TrackView({
                 >
                   <button
                     onClick={() => onCompleteLap(id)}
-                    disabled={disabled || isOut}
+                    // A finished car has no lap left to complete. The undo for
+                    // a mis-tapped last one is the results view's −.
+                    disabled={disabled || isOut || isHome}
                     className="rounded border border-neutral-700 px-3 py-2 text-sm text-neutral-300 disabled:opacity-30"
                   >
                     +lap

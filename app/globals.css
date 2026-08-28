@@ -1,8 +1,33 @@
 @import "tailwindcss";
 
+/**
+ * The app is dark, always — not "dark by default".
+ *
+ * Every screen in here is written against a dark ground: neutral-800 borders,
+ * neutral-400 secondary text, emerald primaries, a black big-screen. There is
+ * no light palette and there never was one — what the Next starter left behind
+ * was a `prefers-color-scheme` block that flipped the *page* to white while
+ * every component kept painting its dark colours on top. On a phone set to
+ * light that made whole screens unreadable, form fields worst of all: a note
+ * box is `bg-neutral-900` and the text in it was the light theme's near-black.
+ *
+ * So the media query is gone rather than being answered with a second palette.
+ * A light theme is a real piece of design work — every one of those colour
+ * choices made twice — and this is a tool for a table in a dim room on game
+ * night. If one is ever wanted it starts from tokens, not from flipping two
+ * variables under a query.
+ *
+ * `color-scheme: dark` is the half that CSS classes cannot do: it is what makes
+ * the browser render its *own* widgets dark — the date picker, the number
+ * spinners, the caret, autofill, scrollbars. Without it a date input on a dark
+ * page gets a black calendar glyph on a dark ground. `viewport.colorScheme` in
+ * `app/layout.tsx` says the same thing in the document head, where it lands
+ * before this stylesheet does and spares the first paint.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
+  --background: #0a0a0a;
+  --foreground: #ededed;
 }
 
 @theme inline {
@@ -10,13 +35,6 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {

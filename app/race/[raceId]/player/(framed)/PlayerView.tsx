@@ -24,6 +24,7 @@ import {
 } from "@/lib/race";
 import { formatRemaining, readTimer } from "@/lib/timer";
 import {
+  outOfPlay,
   projectAdvance,
   projectStartRound,
   rewindUnstarts,
@@ -181,20 +182,33 @@ export default function PlayerView({ raceId }: { raceId: string }) {
    * advance past a car that never moved.
    */
   async function commitTurn(
-    project: (live: LiveState) => TurnProjection,
+    project: (live: LiveState) => TurnProjection | null,
     write: (expect: string) => Promise<boolean>,
   ) {
     if (!live) return;
     setActionError(null);
 
     const before = turnKey(live);
-    let next: TurnProjection;
+    let next: TurnProjection | null;
     try {
       next = project(live);
     } catch (e) {
-      // projectAdvance throws where advanceTurn throws — "every car has
-      // retired" and friends. Report it and write nothing.
+      // projectAdvance throws where advanceTurn throws — an empty round order
+      // and friends. Report it and write nothing.
       setActionError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+
+    // Nowhere for the turn to go: every car has finished or retired, and the
+    // write seals the race. There is nothing to project and nothing to hold —
+    // what comes back is a different screen entirely, so an optimistic turn
+    // would only be a wrong one.
+    if (!next) {
+      try {
+        await write(before);
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : String(e));
+      }
       return;
     }
 
@@ -342,15 +356,23 @@ export default function PlayerView({ raceId }: { raceId: string }) {
     );
   }
 
-  // Absent on races created before retirement was modelled.
+  // Both absent on races created before their features existed.
   const retired = new Set(live.retired ?? []);
+  // Cars that have crossed the line. Not retired, and never drawn as if they
+  // were — they finished, which is the opposite thing.
+  const home = new Set(live.finished ?? []);
+  const parked = outOfPlay(live);
 
   const turnIndex = live.currentPlayerId
     ? live.roundOrder.indexOf(live.currentPlayerId)
     : -1;
   const nextUp = live.roundOrder
     .slice(turnIndex + 1)
-    .find((id) => !retired.has(id));
+    .find((id) => !parked.has(id));
+  // Nowhere for the turn to go: this tap is the last one of the race. The same
+  // projection the button writes with, so the label cannot promise a round that
+  // is not coming.
+  const endsRace = live.roundOrder.length > 0 && projectAdvance(live) === null;
 
   // Standings are what the next round will be built from, so this is the list
   // to nudge when someone overtakes.
@@ -471,6 +493,7 @@ export default function PlayerView({ raceId }: { raceId: string }) {
           const alreadyMoved = roundIdx !== -1 && roundIdx < turnIndex;
           const laps = participants.get(id)?.lapsCompleted ?? 0;
           const isOut = retired.has(id);
+          const isHome = home.has(id);
 
           return (
             <div
@@ -485,9 +508,11 @@ export default function PlayerView({ raceId }: { raceId: string }) {
                 className={`flex-1 ${
                   isOut
                     ? "text-neutral-600 line-through"
-                    : alreadyMoved
-                      ? "text-neutral-500"
-                      : ""
+                    : isHome
+                      ? "text-emerald-400"
+                      : alreadyMoved
+                        ? "text-neutral-500"
+                        : ""
                 }`}
               >
                 {nameOf(id)}
@@ -495,15 +520,29 @@ export default function PlayerView({ raceId }: { raceId: string }) {
               <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-400">
                 lap {laps}
               </span>
-              <button
-                onClick={() =>
-                  run(() => completeLap(raceId, id, { source: "manual" }))
-                }
-                disabled={busy || isOut}
-                className="rounded border border-neutral-700 px-2 py-1 text-xs disabled:opacity-30"
-              >
-                +lap
-              </button>
+              {/* The flag takes the +lap button's place rather than sitting
+                  beside it: a finished car has no lap left to complete, and
+                  these rows already overflow a 390px phone. Undoing a
+                  mis-tapped last lap is the results view's −, the same place
+                  every other mis-tapped lap is undone. */}
+              {isHome ? (
+                <span
+                  title="Finished"
+                  className="rounded border border-emerald-800 bg-emerald-950/50 px-2 py-1 text-xs"
+                >
+                  🏁
+                </span>
+              ) : (
+                <button
+                  onClick={() =>
+                    run(() => completeLap(raceId, id, { source: "manual" }))
+                  }
+                  disabled={busy || isOut}
+                  className="rounded border border-neutral-700 px-2 py-1 text-xs disabled:opacity-30"
+                >
+                  +lap
+                </button>
+              )}
               <button
                 onClick={() =>
                   run(() => setDnf(raceId, id, !isOut, { source: "manual" }))
@@ -618,9 +657,11 @@ export default function PlayerView({ raceId }: { raceId: string }) {
       >
         Next turn
         <span className="mt-2 block text-base font-normal opacity-80">
-          {nextUp
-            ? `up next: ${nameOf(nextUp)}`
-            : `ends round ${live.currentRound} — next order comes from standings`}
+          {endsRace
+            ? "ends the race — everyone is home or out"
+            : nextUp
+              ? `up next: ${nameOf(nextUp)}`
+              : `ends round ${live.currentRound} — next order comes from standings`}
         </span>
       </button>
 

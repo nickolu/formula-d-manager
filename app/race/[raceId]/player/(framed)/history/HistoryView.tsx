@@ -216,6 +216,8 @@ function describe(event: RaceEvent, nameOf: (id: PlayerId) => string): string {
       return `Race finished — ${nameOf(event.order[0])} wins. Order: ${list(event.order)}${
         event.dnf.length > 0 ? `. Retired: ${list(event.dnf)}` : ""
       }.`;
+    case "raceReopened":
+      return `Race reopened — the result was ${list(event.order)}.`;
     case "raceResultAmended":
       return `Result amended — ${nameOf(event.order[0])} wins. Order: ${list(event.order)}${
         event.dnf.length > 0 ? `. Retired: ${list(event.dnf)}` : ""

@@ -5,14 +5,14 @@ description: Work through the Formula D league tool's feature backlog one item a
 
 # Formula D backlog
 
-A backlog of 20 tracked changes, each with its own spec file. This skill is the
+A backlog of 21 tracked changes, each with its own spec file. This skill is the
 process for working them: pick one, read its spec, build it, verify it, close it.
 
 **Read `BACKLOG.md` first.** It is the live status board and the only place
 status is recorded. Item specs live in `items/NN-slug.md`.
 
-**All 20 items are done.** Items 1–12 were Phase 1 plus the Phase 2 UI pass;
-13–19 were the seasons and teams arc, which shares one design document:
+**All 21 items are done.** Items 1–12 were Phase 1 plus the Phase 2 UI pass;
+13–19 were the seasons and teams arc, and 20 is the first item after it, which shares one design document:
 **`docs/seasons-and-teams.md` in the repo is authoritative for that model.**
 
 The backlog is not the live picture any more — `AGENTS.md` is. A shipped item's
@@ -179,3 +179,4 @@ the primary case, not a final polish pass.
 | 17 | Teams, admin side | `items/17-teams-admin.md` |
 | 18 | Teams, player side | `items/18-teams-player.md` |
 | 19 | Standings: drivers and constructors | `items/19-standings-teams.md` |
+| 20 | Crossing the line | `items/20-crossing-the-line.md` |
