@@ -27,6 +27,7 @@ import {
   outOfPlay,
   projectAdvance,
   projectStartRound,
+  rewindUnstarts,
   turnKey,
   type TurnProjection,
 } from "@/lib/turn";
@@ -412,6 +413,14 @@ export default function PlayerView({ raceId }: { raceId: string }) {
     </p>
   );
 
+  /*
+   * From the first car of round 1 the reverse gear has no earlier turn to go
+   * to, so it steps back past the flag drop and returns the race to the grid.
+   * The label says so: "back a turn" on a control that un-starts the race is
+   * the kind of surprise this view exists to avoid. The condition is
+   * `rewindUnstarts` rather than a second copy of the arithmetic here, for the
+   * same reason the projected turn is — one function, two callers.
+   */
   const backATurn = (
     <div className="-mt-2 flex justify-end">
       <button
@@ -419,7 +428,7 @@ export default function PlayerView({ raceId }: { raceId: string }) {
         disabled={busy}
         className="px-2 py-1 text-xs uppercase tracking-widest text-neutral-600 underline decoration-neutral-800 underline-offset-4 active:text-neutral-300 disabled:opacity-30"
       >
-        ↩ back a turn
+        {rewindUnstarts(live) ? "↩ back to the grid" : "↩ back a turn"}
       </button>
     </div>
   );

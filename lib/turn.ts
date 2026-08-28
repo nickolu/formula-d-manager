@@ -193,15 +193,41 @@ export function projectAdvance(live: LiveState): TurnProjection | null {
 }
 
 /**
- * What Start round does: leave the interstitial with the leader up — or null,
- * as above, when there is nobody left to put up. A lap tapped during the
- * interstitial can finish the last car still running.
+ * Whether the reverse gear steps back past the flag drop rather than onto
+ * another car: the race is sitting on the first car of round 1, so there is no
+ * earlier turn to go to and `rewindTurn` un-starts the race instead.
+ *
+ * Here beside projectAdvance for the same reason those are here — the
+ * transaction and the view have to agree. The view labels the button with it,
+ * because "back a turn" on a control that puts the whole race back on the grid
+ * is a surprise, and this is the one place the arithmetic lives.
+ *
+ * A fact about the live doc, not about the race: an unstarted race satisfies it
+ * too, which is why rewindTurn checks the status as well.
  */
-export function projectStartRound(live: LiveState): TurnProjection | null {
-  const skip = outOfPlay(live);
-  const first = nextRunner(live.roundOrder, skip, 0, 1);
+export function rewindUnstarts(
+  live: Pick<
+    LiveState,
+    "phase" | "currentRound" | "currentPlayerId" | "roundOrder" | "retired"
+  >,
+): boolean {
+  if (live.currentRound > 1) return false;
+  // In the interstitial roundOrder is already the next round's snapshot, so a
+  // rewind always crosses a boundary — and in round 1 there is none to cross.
+  if (live.phase === "betweenRounds") return true;
 
-  if (first === -1) return null;
+  const retired = new Set(live.retired ?? []);
+  const index = live.currentPlayerId
+    ? live.roundOrder.indexOf(live.currentPlayerId)
+    : live.roundOrder.length;
+  return nextRunner(live.roundOrder, retired, index - 1, -1) === -1;
+}
+
+/** What Start round does: leave the interstitial with the leader up. */
+export function projectStartRound(live: LiveState): TurnProjection {
+  const retired = new Set(live.retired ?? []);
+  const first = nextRunner(live.roundOrder, retired, 0, 1);
+  if (first === -1) throw new Error("Every car has retired");
 
   return {
     phase: "turn",

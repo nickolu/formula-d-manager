@@ -509,6 +509,20 @@ export interface RaceStartedEvent extends BaseEvent {
 }
 
 /**
+ * The flag drop, undone. Rewinding from the very first car of round 1 has no
+ * earlier turn to step back to — the only thing before it is the start itself —
+ * so it puts the race back to `scheduled` with the grid editable again.
+ *
+ * Its own variant rather than a turnRewound, because no turn moved: what
+ * changed is the race's status, and a replay has to be able to see that.
+ */
+export interface RaceUnstartedEvent extends BaseEvent {
+  type: "raceUnstarted";
+  /** The grid the race goes back to, which is the standings as they stood. */
+  order: PlayerId[];
+}
+
+/**
  * A partial edit of RaceSettings, one level deeper than Partial<> reaches.
  * Switching car status on must not require restating the spec beside it —
  * updateRaceSettings writes nested settings by dot path precisely so it
@@ -667,6 +681,7 @@ export interface RaceReopenedEvent extends BaseEvent {
 export type RaceEvent =
   | RaceCreatedEvent
   | RaceStartedEvent
+  | RaceUnstartedEvent
   | RaceSettingsChangedEvent
   | PlayerRemovedEvent
   | PlayerJoinedEvent

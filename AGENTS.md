@@ -70,6 +70,25 @@ It is seeded by `createRace`, optional (races predating it fall back to
 `turnDurationMs` — no migrations here), and it is the field the race settings
 view edits.
 
+**Rewinding off the front of round 1 un-starts the race.** There is no earlier
+turn there — the only thing behind the first car is the flag drop — so that is
+what the reverse gear undoes: `status` goes back to `scheduled`, the live doc
+returns to the shape `createRace` writes (pole sitter up, clock stopped, the
+two orders one list again) and the grid is editable until Start race is tapped
+again. It used to throw "Nothing to rewind to", which made a flag dropped by
+mistake the one turn nobody could take back. This is the one branch that reads
+the race document, and it can: the within-round branch has already returned, so
+nothing has been written in the transaction yet.
+
+It appends `raceUnstarted`, **not** `turnRewound`, and that is the line between
+this and the paused-clock rule above: no turn moved, the race's *status* did,
+and a replay cannot derive that from a turn event. An unstarted race is still
+refused — the status check is what tells the two apart, since a scheduled live
+doc satisfies exactly the same arithmetic. `rewindUnstarts` in `lib/turn.ts` is
+that arithmetic, beside `projectAdvance` and for the same reason: the player
+view labels the button "back to the grid" instead of "back a turn", and a
+second copy would drift on the first retired car.
+
 Because rollover overwrites `roundOrder`, a rewind can only cross a boundary
 thanks to `previousRoundOrder` — one round of history, saved by `advanceTurn`
 at each rollover and cleared once used. Rewinding deliberately does **not** try
@@ -1045,7 +1064,7 @@ it lists every race, which is what `/` wants.
 ## Verification
 
 ```bash
-npm run smoke         # 287 end-to-end checks against the real project
+npm run smoke         # end-to-end checks against the real project
 npm run seed-season   # create the default season if missing (idempotent)
 ```
 

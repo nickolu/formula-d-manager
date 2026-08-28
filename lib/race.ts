@@ -655,6 +655,11 @@ export async function startRound(
  * one round boundary — that is the whole reason advanceTurn saves
  * previousRoundOrder.
  *
+ * From the very first car of round 1 there is no earlier turn, so it steps back
+ * past the flag drop instead and returns the race to `scheduled`. See the
+ * branch below; `rewindUnstarts` in lib/turn.ts is the same condition, for the
+ * view that has to label the button.
+ *
  * Leaves the race PAUSED with a full clock: turnStartedAt null (which is what
  * readTimer already reads as paused — do not add a pause flag) and
  * turnDurationMs reset to the configured turn length. Rewinding means
@@ -705,9 +710,48 @@ export async function rewindTurn(raceId: string, who: Actor) {
       return;
     }
 
+    // The first car of round 1 has no earlier turn behind it — the only thing
+    // before it is the flag drop, so that is what this rewind undoes. The race
+    // goes back to `scheduled`: the grid becomes editable again, the clock
+    // stops, and Start race is offered exactly as it was a moment ago. Better
+    // than the refusal this used to be, because a flag dropped by mistake is
+    // the one turn nobody could take back.
+    //
+    // Only raceUnstarted is appended. No turn moved; what changed is the
+    // status, and the rest is the scheduled state's own rules — the same
+    // bargain as a rewind leaving the clock paused.
+    if (live.currentRound <= 1) {
+      // Safe to read here: the within-round branch has returned, so nothing has
+      // been written in this transaction yet. refuseIfOver only reads the race
+      // when nobody is on the turn, which on the first car is never.
+      const race = await readRace(tx, raceId);
+      if (race.status !== "live") throw new Error("Nothing to rewind to");
+
+      tx.update(raceDoc(raceId), { status: "scheduled" });
+      tx.update(liveDoc(raceId), {
+        phase: "turn",
+        // The scheduled shape createRace writes: the grid's first car shown
+        // with a full clock that isn't running, and the two orders one list
+        // again until startRace snapshots them apart.
+        currentPlayerId: live.positionOrder[0] ?? null,
+        roundOrder: live.positionOrder,
+        currentRound: 1,
+        turnStartedAt: null,
+        turnDurationMs: live.turnDurationDefaultMs ?? live.turnDurationMs,
+        previousRoundOrder: null,
+        updatedAt: serverTimestamp(),
+      });
+
+      appendEvent(tx, raceId, who, {
+        type: "raceUnstarted",
+        order: live.positionOrder,
+      });
+      return;
+    }
+
     // Crossing back into the previous round. Only one round is kept.
     const previous = live.previousRoundOrder;
-    if (live.currentRound <= 1 || !previous || previous.length === 0) {
+    if (!previous || previous.length === 0) {
       throw new Error("Nothing to rewind to");
     }
 
